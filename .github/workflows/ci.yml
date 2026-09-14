@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# The repository is public. Nothing here needs write access, and granting it
+# would widen the blast radius of a compromised dependency.
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # Runs first and fails fast: a single leaked statement in a public repo is
+      # permanent, so nothing else is worth reporting until this passes.
+      - name: Block plaintext financial data
+        run: npm run check:no-plaintext
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build

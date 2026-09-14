@@ -1,0 +1,57 @@
+name: Validate
+
+# Deliberately ONCE PER DAY, at an off-peak minute.
+#
+# AGENTS.md §9: higher frequencies on public repositories are treated as abuse
+# and can get the account restricted. A scheduled run on a public repo is also
+# best-effort — it may be delayed or skipped entirely — so every step here must
+# be idempotent and safe to miss. Nothing here decrypts anything: the passphrase
+# only ever exists in the user's device memory, so a runner physically cannot
+# read the snapshots.
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  # Required, because GitHub automatically disables scheduled workflows after
+  # 60 days without repository activity. There must always be a manual way in.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Re-check that the repository holds no plaintext data
+        run: npm run check:no-plaintext
+
+      - name: Report how stale the newest snapshot is
+        run: |
+          newest=$(find . -name '*.enc' -not -path './node_modules/*' -printf '%T@ %p\n' 2>/dev/null \
+            | sort -rn | head -n 1 | cut -d' ' -f2-)
+
+          if [ -z "$newest" ]; then
+            echo "::warning::No encrypted snapshot found. Export one from the app's Backup tab and commit it."
+            exit 0
+          fi
+
+          age_days=$(( ( $(date +%s) - $(stat -c %Y "$newest") ) / 86400 ))
+          echo "Newest snapshot: $newest (${age_days} day(s) old)"
+
+          if [ "$age_days" -gt 45 ]; then
+            echo "::warning::The newest snapshot is ${age_days} days old. Run a backup from the app's Backup tab."
+          fi
+
+      # Deliberately NOT here: decrypting, or fetching from the user's device.
+      # A runner cannot reach the user's IndexedDB, and the passphrase must never
+      # be placed in Actions secrets. See AGENTS.md §2 and §9.

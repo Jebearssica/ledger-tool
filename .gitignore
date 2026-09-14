@@ -1,0 +1,35 @@
+# --- PRIVACY: never commit plaintext financial data (see AGENTS.md §3) ---
+# Statement exports, archives and anything that could leak amounts.
+/data/**
+*.csv
+*.tsv
+*.txt
+*.xls
+*.xlsx
+*.zip
+*.pdf
+*.eml
+*.enc
+
+# Allow synthetic test fixtures that are explicitly committed.
+!src/tests/fixtures/**
+!src/tests/fixtures/**/*.csv
+!src/tests/fixtures/**/*.txt
+
+# --- Node ---
+node_modules/
+dist/
+dist-ssr/
+coverage/
+*.tsbuildinfo
+
+# --- Editors / OS ---
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- Logs ---
+*.log
+npm-debug.log*
