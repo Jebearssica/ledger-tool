@@ -1,9 +1,25 @@
 # AGENTS.md
 
-> **状态 / Status**：本仓库目前**只有 `plan.md`，没有任何实现代码**。以下“技术选型”“约定”等章节是**待确认的建议**（标 `[建议]`），不是已存在的既成约定。
-> This repo currently contains **only `plan.md` — no code**. Sections marked `[建议]` are **proposals awaiting confirmation**, not established conventions.
-> 实现落地后请删掉 `[建议]` 标记并按实际代码修正本文件。
-> Requirements belong in [plan.md](./plan.md) — link to it, do not copy it here.
+> **状态 / Status**：**已实现。** 本文件记录的是**已落地的约定**，与代码一致。
+> **Implemented.** This file records **established conventions** that match the code.
+> 需求见 [plan.md](./plan.md)，本文件只记约束（怎么做）。
+> Requirements live in [plan.md](./plan.md); this file records constraints only.
+> 改动实现后请同步修正本文件 —— 一份与代码不符的约束文档比没有更糟。
+> Keep this file in sync with the code. A stale constraint doc is worse than none.
+
+---
+
+## 0. 快速定位 / Start here
+
+| 你想做的事 | 从这里开始 |
+|---|---|
+| 加一家银行的导入 | `src/importers/template.ts` —— 只需要加模板数据，**不要**写机构分支 |
+| 加一家平台的导入 | `src/importers/<平台>.ts`，仿 `alipay.ts`，并补合成夹具与单测 |
+| 改金额 / 日期行为 | `src/domain/money.ts` / `src/domain/dates.ts` —— 先读那里的注释，再看单测 |
+| 改去重规则 | `src/domain/fingerprint.ts` —— **必须**同时递增 `FINGERPRINT_VERSION` |
+| 改分类规则 | `src/domain/categories.ts` 的 `DEFAULT_RULES` |
+| 改收支/转账判定 | `src/domain/classify.ts`，单测在 `classify.test.ts`，**这是最容易记错账的地方** |
+| 跑全部校验 | `npm run check:no-plaintext && npm run typecheck && npm test && npm run build` |
 
 ---
 
@@ -19,21 +35,21 @@ Personal expense tracker: import Alipay / WeChat Pay / bank statements → dedup
 
 ---
 
-## 2. 技术选型 `[建议]` / Stack (proposed)
+## 2. 技术选型 / Stack
 
 **单一 TypeScript 代码库 + PWA**，理由：一份代码同时满足 Windows 与 Android，无需 Android SDK、签名打包或应用商店审核。
 
 | 关注点 | 方案 |
 |---|---|
-| 应用 | Vite + React + TypeScript，编译为 PWA（离线可用） |
-| Windows | 浏览器直接打开 GitHub Pages 站点 |
+| 应用 | Vite 8 + React 19 + TypeScript 7，编译为 PWA（离线可用） |
+| Windows | 浏览器直接打开构建产物 |
 | Android | Chrome「添加到主屏幕」安装为 PWA |
-| 解析 | **全部在客户端完成**（流水文件永远不离开用户设备）：`papaparse` (CSV/TXT)、XLSX 库、`pdfjs-dist` (PDF)。**必须懒加载**，见 §2.1 |
-| 本地存储 | IndexedDB |
-| 云端备份 | 加密快照（见 §3） |
+| 解析 | **全部在客户端完成**（流水文件永远不离开用户设备）：`papaparse` (CSV/TXT)、`read-excel-file` (XLSX)、`pdfjs-dist` (PDF)、`fflate` (`.zip`)。**全部懒加载**，见 §2.1 |
+| 本地存储 | IndexedDB（经 `idb`） |
+| 云端备份 | 加密快照（见 §3）；**手动导出**，Actions 只校验 |
 | 测试 | vitest；夹具为**合成数据** |
 | 后端 | **无 / none** —— 见下方说明 |
-| CI | Node 20 + GitHub Actions，仅做校验/备份 |
+| CI | Node 24 + GitHub Actions，仅做校验/备份 |
 
 ### 2.1 解析依赖取舍 / Parser dependency tradeoffs
 
@@ -41,21 +57,47 @@ Personal expense tracker: import Alipay / WeChat Pay / bank statements → dedup
 
 | 库 | min | **gzip** | 状态 |
 |---|---|---|---|
-| `papaparse` | 19 KB | **6.9 KB** | ✅ 活跃维护，直接用 |
+| `papaparse` | 19 KB | **6.9 KB** | ✅ 已采用（主 bundle） |
+| `read-excel-file` | 41 KB | **11 KB** | ✅ **已采用**（懒加载），依赖 `fflate`，浏览器原生可用 |
 | `xlsx` (SheetJS CE, npm) | 412 KB | **140 KB** | ❌ **npm 版已废弃**，见下 |
-| `exceljs` | 932 KB | **256 KB** | ✅ 活跃维护、MIT，但比 SheetJS 重 **+116 KB gzip** |
-| `pdfjs-dist` | 306 KB | **85 KB** | ✅ Mozilla 维护（另有体积可观的独立 worker，未计入） |
+| `exceljs` | 932 KB | **256 KB** | ❌ 已评估后放弃（见下） |
+| `pdfjs-dist` | 306 KB | **85 KB** | ✅ 已采用（懒加载；另有 1.27 MB 独立 worker） |
+| `fflate` | — | **~8 KB** | ✅ 已采用（懒加载），解 `.zip` |
 
 **SheetJS 不能从 npm 装** —— 这是硬事实，不是偏好：
 
 - CVE-2023-30533（原型污染，High 7.8，影响 < 0.19.3）：npm 上 **patched versions = None**。
 - CVE-2024-22363（ReDoS，High 7.5，影响 < 0.20.2）：npm 上 **patched versions = None**。
 - 原因：SheetJS 已停止维护 GitHub/npm 分发，安全版本只能从其自家 CDN（cdn.sheetjs.com，≥0.20.2）获取。
-- 因此三条路选一：(a) `exceljs`（MIT、活跃，代价 +116 KB gzip）；(b) SheetJS 从其 CDN 引入固定版本；(c) 先只支持 CSV/TXT，XLSX 后置。**不要** `npm i xlsx`。
 
-**为什么体积在这里是硬约束**：PWA 在 Android 上就是网页，首次访问要下载全部非懒加载 JS。若把 CSV+XLSX+PDF 三个解析器都打进主 bundle，用户在看到任何界面之前就要先下载 **230 KB+ gzip**。
+**XLSX 最终选 `read-excel-file`，不是 `exceljs`。** `exceljs` 虽然 MIT 且活跃，但有两个实际问题：
 
-**对策：动态 `import()` 按需加载。** 主 bundle 只含 UI + `papaparse`；用户真正选中 `.xlsx` / `.pdf` 时才加载对应解析器。
+1. 体积 **256 KB gzip**，是 `read-excel-file` 的 **23 倍**；
+2. 它在 Vite 里解析到 Node 入口（`lib/exceljs.nodejs.js`），需要 `Buffer` / `stream` polyfill，而 `read-excel-file` 是浏览器优先、零 polyfill。
+
+两者都只在用户真的选中 `.xlsx` 时才加载，所以这一条不是因为首屏，而是因为**移动端按需下载的成本**。**不要** `npm i xlsx`。
+
+**为什么体积在这里是硬约束**：PWA 在 Android 上就是网页，首次访问要下载全部非懒加载 JS。若把 CSV+XLSX+PDF 三个解析器都打进主 bundle，用户在看到任何界面之前就要先下载 **500 KB+ gzip**（PDF 的 worker 还没算）。
+
+**对策：动态 `import()` 按需加载，并且不让懒加载块进预缓存。**
+
+实测构建产物（`npm run build`）：
+
+| 产物 | 大小 | 首屏需要？ |
+|---|---|---|
+| `index-*.js`（React + UI + 我们的代码） | 313 KB / **99 KB gzip** | 是（React 占大头） |
+| `index-*.css` | 4.9 KB / **1.7 KB gzip** | 是 |
+| `pdf-*.js` + `pdfjs` chunk | 431 KB / 129 KB gzip | 否，懒加载 |
+| `pdf.worker.min.mjs` | 1.27 MB | 否，懒加载 |
+| `universal-*.js`（read-excel-file） | 41 KB / 11 KB gzip | 否，懒加载 |
+| PWA **预缓存总量** | **326 KB**（9 项） | 安装时一次 |
+
+因此 `vite.config.ts` 里有两条硬约束：
+
+1. **不要把懒加载解析器写进 `manualChunks`** —— Rollup 自动切分就够了。
+2. **`workbox.globIgnores` 必须继续排除 `pdf-*.js` / `universal-*.js` / `pdf.worker*`**；它们由 `runtimeCaching` 在使用后缓存。若把它们加回预缓存，安装 PWA 会变成下载 ~570 KB，懒加载就白做了。
+
+同理，**任何新解析器都不得被静态 import 进 UI**。曾经的坑：`ImportPanel.tsx` 从 `importers/pdf.ts` 引入了 `PDF_PASSWORD_REQUIRED` 常量，于是 430 KB 的 pdf.js 被静态拉进主 bundle，懒加载失效。修法是把这个常量放进**不 import 任何东西**的 `src/importers/errors.ts`。加新错误类型时请沿用这个模式，Vite 会在构建时用 `INEFFECTIVE_DYNAMIC_IMPORT` 警告这件事。
 
 不使用 Python、不使用原生 Android 工程、不使用后端，除非用户明确要求。
 
@@ -87,7 +129,7 @@ Personal expense tracker: import Alipay / WeChat Pay / bank statements → dedup
 
 ---
 
-## 4. 领域模型 `[建议]` / Domain model
+## 4. 领域模型 / Domain model
 
 ```
 Transaction {
@@ -159,10 +201,12 @@ Transaction {
 
 | 层 | 位置 | 说明 |
 |---|---|---|
-| **专用解析器** | `src/importers/alipay/`、`src/importers/wechat/` | 格式固定且已知，硬编码列布局（§8.2）。 |
-| **通用解析器** | `src/importers/generic/` | 银行 / 券商 / 任何未知来源。**由「模板」驱动**：列映射 + 编码 + 分隔符 + 日期格式，用户在 UI 里把列名指到字段上。不写 `if (bank === 'cmb')`。 |
+| **专用解析器** | `src/importers/alipay.ts`、`src/importers/wechat.ts` | 格式固定且已知，硬编码列布局（§8.2）。 |
+| **通用解析器** | `src/importers/generic.ts` + `template.ts` | 银行 / 券商 / 任何未知来源。**由「模板」驱动**：列映射 + 编码 + 金额语义 + 方向取值，用户在 UI 里把列名指到字段上。不写 `if (bank === 'cmb')`。 |
+| **容器识别与路由** | `src/importers/sniff.ts` + `index.ts` | 按**字节内容**识别容器、解 `.zip`、按**表头**路由到上面三者。 |
 
-- 所有解析器只暴露 `parse(input: File | ArrayBuffer, template?): Transaction[]`。
+- 解析器只暴露 `parseXxx(table, options): ParseResult`，产出 **`DraftTransaction[]`** —— 即「已解析、但尚未判 kind / 未去重 / 未分类」的中间态。
+- **判 kind、配对、分类、去重全部在 `src/domain/pipeline.ts`**，解析器不碰这些。
 - 解析器**不得直接写数据库**，也不得做去重/分类 —— 保持纯解析，便于单测与重放。
 - **模板必须带版本号**（如 `cmb@2026-09`）。平台改版会改变列布局；把版本钉住，旧文件才不会被新模板静默解析错。
 - **校验失败要显式报错**：模板与文件表头不匹配时抛错并展示实际表头，**绝不**静默按错位的列解析出错误金额。
@@ -179,7 +223,8 @@ Transaction {
 **结论：`csv` / `txt` / `xls` / `xlsx` / `pdf` 五种都会遇到。** 处理方式：
 
 - `.txt` 归一化为 **CSV** 解析。
-- `.xls` **不可信**：有些券商/银行的 `.xls` 其实是 **TSV 纯文本**或 **HTML 表格**，不是真 Excel。**按内容嗅探，不按扩展名**（真 XLS 有 OLE 魔数 `D0 CF 11 E0`；嗅探失败则回退按文本解析）。
+- `.xls` **不可信**：有些券商/银行的 `.xls` 其实是 **TSV 纯文本**或 **HTML 表格**，不是真 Excel。**按内容嗅探，不按扩展名**（真 XLS 有 OLE 魔数 `D0 CF 11 E0`；嗅探失败则回退按文本解析）。TSV 与 HTML 两条路都已实现并有单测。
+- **真正的二进制 `.xls`（OLE/CFB）目前不支持**：会**明确报错**并要求用户改导出 CSV/XLSX，而不是猜。这是刻意留下的缺口 —— 真 OLE 需要专门解析器，而现实中命名为 `.xls` 的银行文件绝大多数是 TSV 或 HTML，已经覆盖。
 - 因此**不需要**维护「支持哪家银行」的清单；需要维护的是**模板库**（一个模板 = 一套列映射），模板可被单个来源复用。
 
 ### 8.2 已核对的列布局 / Verified column layouts (0-indexed)
@@ -191,7 +236,7 @@ Transaction {
 ### 8.3 解析陷阱 / Parsing pitfalls
 
 1. **不要硬编码表头行数**（23 / 17 / 18 这类数字会随平台改版失效）。改为**扫描表头行**：找到首列等于 `交易时间` 的那一行，其后才是数据。
-2. **微信 CSV 字段里混有制表符** `\t`（为防 Excel 自动转换而加），**解析前必须整体剔除**，否则列错位。
+2. **微信 CSV 字段里混有制表符** `\t`（为防 Excel 自动转换而加）。实测真实风险**不是**列错位 —— 首尾的制表符会被 trim 掉 —— 而是 **`guessDelimiter` 可能把文件误判成 TSV**，那才会毁掉所有列。对策：分隔符按「谁更占优」选择（逗号通常多一个数量级），并在分隔符不是 `\t` 时整体剔除制表符（`parseDelimited` 的 `stripTabs`，对真正的 TSV 会显式拒绝）。
 3. **微信 `金额` 带 `¥` 前缀**，需剥离后再转整数分。
 4. **支付宝老版账单**首行含 `支付宝` 且列布局不同 → 必须**显式报错**提示版本不兼容，不要静默按新格式解析。
 5. 金额一律解析为**整数分**，禁止 `parseFloat` 后直接参与运算（见 §4）。
@@ -230,16 +275,22 @@ Transaction {
 
 ## 10. 命令 / Commands
 
-> ⚠️ 仓库尚未初始化（无 `package.json`）。首次开工先搭脚手架，随后回填此节。
-> This repo has no `package.json` yet. Scaffold first, then fill in this section.
-
 ```bash
 npm ci                       # install
 npm run dev                  # local dev server
-npm run build                # build PWA to dist/
-npm test                     # vitest
+npm run build                # typecheck + build PWA to dist/
+npm run typecheck            # tsc --noEmit
+npm test                     # vitest run
 npm run check:no-plaintext   # block plaintext financial data
 ```
+
+提交前跑全套：`npm run check:no-plaintext && npm run typecheck && npm test && npm run build`
+
+**本机环境注意**（Windows，无管理员权限）：
+
+- Node 不在 PATH 上，装在 `%LOCALAPPDATA%\nodejs`；用前先 `$env:PATH = "$env:LOCALAPPDATA\nodejs;$env:PATH"`。
+- 用 **`npm.cmd`** 而不是 `npm` —— PowerShell 执行策略会拦截 `npm.ps1`。
+- 终端若显示中文乱码，先 `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8`。
 
 ---
 
@@ -262,8 +313,11 @@ npm run check:no-plaintext   # block plaintext financial data
 6. ~~首批要支持哪家银行？~~ **已决：不做机构清单。** 银行流水一律走**通用解析器 + 模板**（§8）；`csv/txt/xls/xlsx/pdf` 五种都覆盖，因此无需逐行适配。
 7. ~~是否支持 PDF？~~ **已决：支持**（见 §8.4）。定位为兜底通道，必须经用户确认后才入库。
 8. ~~解析依赖怎么选？~~ **已决：见 §2.1。** `papaparse` 直接用；`xlsx` 不走 npm；XLSX / PDF 解析器**一律动态加载**。
+9. ~~加密快照的触发方式？~~ **已决：手动导出 + 用户自行提交**（方案 a），Actions 只做校验与陈旧提醒（方案 c）。否决了方案 (b)（网页内用 token 提交）：它要求用户把有写权限的 token 交给网页，而 §3 明确规定密钥类凭据不得进入仓库、日志或 URL。为省两次点击去承担这个风险不值得。
 
 ## 13. 仍待定 / Still open
 
-1. 加密快照的**触发方式**：Actions 无法访问本地设备，只能处理已推送的 blob。需定型三种用户流程之一：**(a)** 手动「导出并 push」；**(b)** 网页内点按钮、用用户提供的细粒度 token 调 GitHub API 提交；**(c)** Actions 定时仅做校验/提醒。见 §9 与下节说明。
-2. 是否接受 `exceljs`（+116 KB gzip）换取 MIT 且活跃维护的 XLSX 支持，还是从 SheetJS CDN 固定版本？见 §2.1。
+1. **尚未配置 GitHub Pages 部署**。`vite.config.ts` 已设 `base: './'`，构建产物可直接托管，但仓库里还没有 Pages workflow。Android 上「添加到主屏幕」需要一个 HTTPS 地址。
+2. **分类规则表还不能在 UI 里编辑**。§7 要求「规则与数据分离」，目前规则仍是 `DEFAULT_RULES` 常量；IndexedDB 里已有 `rules` store，但界面未接。
+3. **多份快照的命名与保留策略未定**。当前由用户自行命名并放置，仓库里还没有 `data/` 约定。
+4. **2 分钟时间桶的合并阈值未按真实数据校准**（见 §5）。若实际出现误合并，需要调整 `TIME_WINDOW_MINUTES`，而**那会改变指纹**，必须同时递增 `FINGERPRINT_VERSION` 并写迁移。
