@@ -1,9 +1,10 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import {
   MIN_PASSPHRASE_LENGTH,
   buildSnapshotPayload,
   decryptSnapshot,
   encryptSnapshot,
+  isWebCryptoAvailable,
   snapshotFileName,
   type SnapshotPayload,
 } from '../crypto/snapshot';
@@ -103,6 +104,14 @@ export default function SnapshotPanel({ onChanged }: Props) {
 
   const passphraseOk = passphrase.length >= MIN_PASSPHRASE_LENGTH;
 
+  /**
+   * Checked once per mount. Outside a secure context the browser withholds
+   * `crypto.subtle`, so the buttons would only produce an error; showing the
+   * reason up front is far more useful than a failed click.
+   */
+  const cryptoAvailable = useMemo(() => isWebCryptoAvailable(), []);
+  const snapshotsDisabled = busy || !passphraseOk || !cryptoAvailable;
+
   return (
     <>
       <div className="card">
@@ -111,6 +120,21 @@ export default function SnapshotPanel({ onChanged }: Props) {
           快照是 AES-256-GCM 密文，密钥由口令经 PBKDF2-SHA256（60 万次迭代）派生。口令只存在于内存中，
           永远不会写入文件、日志或 URL。正因如此，<strong>口令一旦丢失，数据无法找回</strong>。
         </p>
+
+        {!cryptoAvailable && (
+          <div className="message warn">
+            <strong>当前页面不是安全上下文，备份功能不可用。</strong>
+            <p className="small" style={{ marginBottom: 0 }}>
+              浏览器只在 <strong>HTTPS</strong> 或 <strong>http://localhost</strong> 下提供 Web Crypto。
+              用局域网地址（例如 <code>http://192.168.x.x:4173</code>）打开时，浏览器会隐藏该接口，
+              因此无法加解密快照。
+            </p>
+            <p className="small" style={{ marginBottom: 0 }}>
+              在这台机器上用 <code>http://localhost</code> 打开即可正常备份；要在手机上备份，
+              需要把站点部署到 HTTPS。统计与导入不受影响，仍然可用。
+            </p>
+          </div>
+        )}
 
         <div className="field" style={{ maxWidth: 380 }}>
           <label htmlFor="snapshot-passphrase">
@@ -130,11 +154,11 @@ export default function SnapshotPanel({ onChanged }: Props) {
           <button
             className="btn primary"
             onClick={() => void exportSnapshot()}
-            disabled={busy || !passphraseOk}
+            disabled={snapshotsDisabled}
           >
             导出加密快照
           </button>
-          <button className="btn" onClick={() => fileRef.current?.click()} disabled={busy || !passphraseOk}>
+          <button className="btn" onClick={() => fileRef.current?.click()} disabled={snapshotsDisabled}>
             从快照恢复
           </button>
           <input

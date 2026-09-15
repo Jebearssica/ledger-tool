@@ -317,7 +317,7 @@ npm run check:no-plaintext   # block plaintext financial data
 
 ## 13. 仍待定 / Still open
 
-1. **尚未配置 GitHub Pages 部署**。`vite.config.ts` 已设 `base: './'`，构建产物可直接托管，但仓库里还没有 Pages workflow。Android 上「添加到主屏幕」需要一个 HTTPS 地址。
+1. **尚未配置 GitHub Pages 部署** —— 这**阻塞了 Android 端的正常使用**。`vite.config.ts` 已设 `base: './'`，构建产物可直接托管，但仓库里还没有 Pages workflow。没有 HTTPS 地址就无法「添加到主屏幕」，也无法使用加密备份（`crypto.subtle` 在非安全上下文下不存在，见 §2.1 与 README）。
 2. **分类规则表还不能在 UI 里编辑**。§7 要求「规则与数据分离」，目前规则仍是 `DEFAULT_RULES` 常量；IndexedDB 里已有 `rules` store，但界面未接。
 3. **多份快照的命名与保留策略未定**。当前由用户自行命名并放置，仓库里还没有 `data/` 约定。
 4. **2 分钟时间桶的合并阈值未按真实数据校准**（见 §5）。若实际出现误合并，需要调整 `TIME_WINDOW_MINUTES`，而**那会改变指纹**，必须同时递增 `FINGERPRINT_VERSION` 并写迁移。

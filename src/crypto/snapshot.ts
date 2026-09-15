@@ -91,8 +91,41 @@ function assertPassphrase(passphrase: string): void {
   }
 }
 
+/**
+ * Whether this page can do crypto at all.
+ *
+ * Browsers expose `crypto.subtle` ONLY in a secure context — HTTPS, or
+ * `http://localhost`. Opening the app over plain HTTP on a LAN address (which is
+ * the obvious way to try it from a phone) silently withholds it, so every call
+ * fails with `Cannot read properties of undefined (reading 'importKey')`.
+ *
+ * Note that `crypto.getRandomValues` is NOT restricted this way, so the padding
+ * filler keeps working; only the cipher itself is unavailable.
+ */
+export function isWebCryptoAvailable(): boolean {
+  return (
+    typeof globalThis.crypto !== 'undefined' &&
+    typeof globalThis.crypto.subtle !== 'undefined' &&
+    globalThis.crypto.subtle !== null
+  );
+}
+
+/** Read at call time, never captured at module load, so it stays stub-able in tests. */
+function requireSubtleCrypto(): SubtleCrypto {
+  if (!isWebCryptoAvailable()) {
+    throw new Error(
+      'This page is not a secure context, so the browser is withholding Web Crypto and no snapshot can be ' +
+        'encrypted or decrypted. Open the app over HTTPS, or over http://localhost on the same machine. ' +
+        'Plain http:// on a LAN address (for example http://192.168.x.x) does not qualify.',
+    );
+  }
+  return globalThis.crypto.subtle;
+}
+
 async function deriveKey(passphrase: string, salt: Uint8Array, iterations: number): Promise<CryptoKey> {
-  const material = await crypto.subtle.importKey(
+  const subtle = requireSubtleCrypto();
+
+  const material = await subtle.importKey(
     'raw',
     new TextEncoder().encode(passphrase),
     'PBKDF2',
@@ -100,7 +133,7 @@ async function deriveKey(passphrase: string, salt: Uint8Array, iterations: numbe
     ['deriveKey'],
   );
 
-  return crypto.subtle.deriveKey(
+  return subtle.deriveKey(
     { name: 'PBKDF2', salt: salt as BufferSource, iterations, hash: 'SHA-256' },
     material,
     { name: 'AES-GCM', length: 256 },
@@ -164,7 +197,7 @@ export async function encryptSnapshot(
   const padded = padPlaintext(plaintext);
   const key = await deriveKey(passphrase, salt, iterations);
 
-  const ciphertext = await crypto.subtle.encrypt(
+  const ciphertext = await requireSubtleCrypto().encrypt(
     { name: 'AES-GCM', iv: iv as BufferSource, additionalData: header as BufferSource },
     key,
     padded as BufferSource,
@@ -220,7 +253,7 @@ export async function decryptSnapshot<T = SnapshotPayload>(
 
   let plaintext: ArrayBuffer;
   try {
-    plaintext = await crypto.subtle.decrypt(
+    plaintext = await requireSubtleCrypto().decrypt(
       { name: 'AES-GCM', iv: iv as BufferSource, additionalData: header as BufferSource },
       key,
       ciphertext as BufferSource,

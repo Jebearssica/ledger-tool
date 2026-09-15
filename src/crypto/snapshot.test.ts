@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   GCM_TAG_BYTES,
   PAD_BLOCK_BYTES,
@@ -7,6 +7,7 @@ import {
   buildSnapshotPayload,
   decryptSnapshot,
   encryptSnapshot,
+  isWebCryptoAvailable,
   snapshotFileName,
   type SnapshotPayload,
 } from '../crypto/snapshot';
@@ -183,5 +184,46 @@ describe('metadata leakage (AGENTS.md §3 rule 6)', () => {
 describe('snapshotFileName', () => {
   it('uses a date-stamped .enc name', () => {
     expect(snapshotFileName(new Date('2026-09-14T04:00:00.000Z'))).toBe('ledger-2026-09-14.enc');
+  });
+});
+
+describe('non-secure context (AGENTS.md §3, §9)', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('reports Web Crypto as available in this environment', () => {
+    expect(isWebCryptoAvailable()).toBe(true);
+  });
+
+  it('reports it as unavailable when the browser withholds crypto.subtle', () => {
+    // Browsers expose crypto.subtle only in a secure context, so opening the app
+    // over plain http:// on a LAN address makes it vanish. getRandomValues stays.
+    vi.stubGlobal('crypto', { getRandomValues: (array: Uint8Array) => array });
+    expect(isWebCryptoAvailable()).toBe(false);
+  });
+
+  it('explains the cause instead of leaking a raw TypeError', () => {
+    // Before this guard the user saw "Cannot read properties of undefined
+    // (reading 'importKey')", which says nothing about what to do next.
+    vi.stubGlobal('crypto', { getRandomValues: (array: Uint8Array) => array });
+
+    return expect(encryptSnapshot(samplePayload(), PASSPHRASE, { iterations: TEST_ITERATIONS })).rejects.toThrow(
+      /secure context/i,
+    );
+  });
+
+  it('names the fix, not just the problem', async () => {
+    vi.stubGlobal('crypto', { getRandomValues: (array: Uint8Array) => array });
+
+    await expect(encryptSnapshot(samplePayload(), PASSPHRASE)).rejects.toThrow(/https:\/\/|localhost/i);
+  });
+
+  it('refuses to decrypt rather than reporting a wrong passphrase', async () => {
+    const bytes = await encrypt(samplePayload());
+    vi.stubGlobal('crypto', { getRandomValues: (array: Uint8Array) => array });
+
+    // Saying "wrong passphrase" here would send the user chasing a non-problem.
+    await expect(decryptSnapshot(bytes, PASSPHRASE)).rejects.toThrow(/secure context/i);
   });
 });
