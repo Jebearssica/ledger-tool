@@ -7,7 +7,7 @@ import { DEFAULT_RULES } from '../domain/categories';
 import { formatMinor } from '../domain/money';
 import { formatShanghai } from '../domain/dates';
 import {
-  getExistingFingerprints,
+  getExistingRecords,
   putTemplate,
   saveImportBatch,
   type ImportBatch,
@@ -125,11 +125,13 @@ export default function ImportPanel({ onImported }: Props) {
           template,
           ...(choice === 'auto' ? {} : { force: choice as 'alipay' | 'wechat' | 'generic' }),
         });
-        const existing = await getExistingFingerprints();
+        const existing = await getExistingRecords();
         const result = buildTransactions(parsed.drafts, {
           batchId: 'preview',
           rules: DEFAULT_RULES,
-          existingFingerprints: existing,
+          // Content, not just keys: this is what lets a row that re-describes an
+          // already-imported transaction CORRECT it instead of being skipped.
+          existingRecords: existing,
         });
         if (!cancelled) {
           setOutcome(result);
@@ -152,7 +154,8 @@ export default function ImportPanel({ onImported }: Props) {
   }, [inspection, template, accountId, choice]);
 
   const confirmImport = useCallback(async () => {
-    if (!inspection || !outcome || outcome.transactions.length === 0) return;
+    if (!inspection || !outcome) return;
+    if (outcome.transactions.length === 0 && outcome.updated.length === 0) return;
 
     setBusy(true);
     setError(null);
@@ -163,17 +166,24 @@ export default function ImportPanel({ onImported }: Props) {
         sourceLabel: inspection.detectedPlatform ?? 'generic',
         importedAt: new Date().toISOString(),
         inserted: outcome.transactions.length,
+        updated: outcome.updated.length,
         duplicates: outcome.duplicates.length,
         dropped: outcome.dropped.length,
         notes: inspection.notes,
       };
 
-      const stamped = outcome.transactions.map((tx) => ({ ...tx, importedBatchId: batch.id }));
+      // Corrections belong to this batch just as the new rows do: it is now the
+      // authority for those records, so it is also what has to be persisted.
+      const stamped = [
+        ...outcome.transactions,
+        ...outcome.updated.map((u) => u.after),
+      ].map((tx) => ({ ...tx, importedBatchId: batch.id }));
       await saveImportBatch(batch, stamped);
       await persistTemplate();
 
       setNotice(
-        `已导入 ${stamped.length} 条。` +
+        `已导入 ${outcome.transactions.length} 条` +
+          (outcome.updated.length > 0 ? `，更新 ${outcome.updated.length} 条已有记录。` : '。') +
           (outcome.duplicates.length > 0 ? `跳过重复 ${outcome.duplicates.length} 条。` : '') +
           (outcome.dropped.length > 0 ? `排除 ${outcome.dropped.length} 条（已关闭/退款抵扣/重复）。` : ''),
       );
@@ -417,12 +427,18 @@ export default function ImportPanel({ onImported }: Props) {
               <h2>导入预览</h2>
               <p className="small muted">
                 这是确认前的完整结果。此处的数字就是入库后的数字。
+                {outcome.updated.length > 0 &&
+                  ' 与已有记录重合的部分以本次导入为准，会更新旧记录。'}
               </p>
 
               <div className="totals">
                 <div>
                   <span className="muted small">新增</span>
                   <span className="value">{outcome.transactions.length}</span>
+                </div>
+                <div>
+                  <span className="muted small">更新已有</span>
+                  <span className="value">{outcome.updated.length}</span>
                 </div>
                 <div>
                   <span className="muted small">重复跳过</span>
@@ -465,6 +481,28 @@ export default function ImportPanel({ onImported }: Props) {
                     <p className="small">…以及另外 {outcome.warnings.length - 8} 条。</p>
                   )}
                 </div>
+              )}
+
+              {outcome.updated.length > 0 && (
+                <details open>
+                  <summary>
+                    将更新 {outcome.updated.length} 条已有记录（与旧记录重合，以本次为准）
+                  </summary>
+                  <ul className="small muted">
+                    {outcome.updated.slice(0, 20).map((u, i) => (
+                      <li key={i}>
+                        {formatShanghai(u.after.occurredAt)} · {u.after.rawDescription} —{' '}
+                        {u.changes.join('；')}
+                      </li>
+                    ))}
+                  </ul>
+                  {outcome.updated.length > 20 && (
+                    <p className="small">…以及另外 {outcome.updated.length - 20} 条。</p>
+                  )}
+                  <p className="small muted">
+                    你手工改过的分类会保留，不会被规则结果覆盖。
+                  </p>
+                </details>
               )}
 
               <div className="table-wrap" style={{ maxHeight: 320, overflowY: 'auto' }}>
@@ -537,9 +575,11 @@ export default function ImportPanel({ onImported }: Props) {
                 <button
                   className="btn primary"
                   onClick={() => void confirmImport()}
-                  disabled={busy || outcome.transactions.length === 0}
+                  disabled={busy || (outcome.transactions.length === 0 && outcome.updated.length === 0)}
                 >
-                  确认导入 {outcome.transactions.length} 条
+                  {outcome.updated.length > 0
+                    ? `确认导入 ${outcome.transactions.length} 条、更新 ${outcome.updated.length} 条`
+                    : `确认导入 ${outcome.transactions.length} 条`}
                 </button>
                 <button
                   className="btn ghost"
@@ -551,9 +591,13 @@ export default function ImportPanel({ onImported }: Props) {
                 >
                   取消
                 </button>
-                {outcome.transactions.length === 0 && outcome.duplicates.length > 0 && (
-                  <span className="muted small">这份文件此前已经导入过，没有新增内容。</span>
-                )}
+                {outcome.transactions.length === 0 &&
+                  outcome.updated.length === 0 &&
+                  outcome.duplicates.length > 0 && (
+                    <span className="muted small">
+                      这份文件此前已经导入过，没有新增内容，也没有需要修正的地方。
+                    </span>
+                  )}
               </div>
             </div>
           )}

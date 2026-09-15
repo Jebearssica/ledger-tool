@@ -6,6 +6,7 @@ import { buildTransactions } from '../domain/pipeline';
 import { DEFAULT_RULES } from '../domain/categories';
 import { FINGERPRINT_VERSION } from '../domain/fingerprint';
 import type { Transaction } from '../domain/types';
+import type { PipelineOutcome } from '../domain/pipeline';
 import {
   ALIPAY_CSV,
   ALIPAY_EXPECTED,
@@ -343,7 +344,6 @@ describe('buildTransactions — idempotency (AGENTS.md §5)', () => {
     expect(totalOf(combined, 'expense')).toBe(ALIPAY_EXPECTED.expenseMinor);
     expect(combined).toHaveLength(ALIPAY_EXPECTED.kept);
   });
-
   it('is stable across three consecutive imports', () => {
     const first = run();
     const seen = new Set(first.transactions.map((t) => t.fingerprint));
@@ -396,5 +396,147 @@ describe('buildTransactions — category ownership (AGENTS.md §7)', () => {
     // ...but an existing user choice is preserved when re-run through recategorize.
     expect(userEdited.category).toBe('travel');
     expect(userEdited.categorySource).toBe('user');
+  });
+});
+
+/**
+ * Overlapping imports. See AGENTS.md §5.
+ *
+ * The fingerprint is a transaction's identity across imports, so a row that
+ * re-describes a stored one is either an identical duplicate or a correction.
+ * Skipping both made the store append-only, which meant a period imported once
+ * could never be fixed — including by the parser and classifier fixes that are
+ * the usual reason for importing a file you already have.
+ */
+describe('buildTransactions — overlapping imports (AGENTS.md §5)', () => {
+  const WECHAT_HEADERS = [
+    '交易时间', '交易类型', '交易对方', '商品', '收/支', '金额(元)',
+    '支付方式', '当前状态', '交易单号', '商户单号', '备注',
+  ];
+
+  /**
+   * One ¥154.00 purchase, in the two shapes the parser produces across the fix
+   * for self-disclosed partial refunds.
+   *
+   * Both shapes share a fingerprint: it is built from the amount PRINTED on the
+   * statement (¥154.00), which netting deliberately leaves untouched so an
+   * overlapping export still dedupes. That is exactly what makes this a
+   * correction rather than a second transaction.
+   */
+  const OLD_IMPORT_ROW = [
+    '2026-05-18 16:26', '商户消费', '示例商户', '示例商品', '支出', '154.00',
+    '零钱', '交易成功', '4200003120202605181626000001', '',
+  ];
+  const NEW_IMPORT_ROW = [
+    '2026-05-18 16:26', '商户消费', '示例商户', '示例商品', '支出', '154.00',
+    '零钱', '已退款(¥9.00)', '4200003120202605181626000001', '',
+  ];
+
+  function runRows(rows: readonly (readonly string[])[], existingRecords?: ReadonlyMap<string, Transaction>) {
+    const table = {
+      rows: [WECHAT_HEADERS, ...rows].map((row) => row.map((c) => c.trim())),
+      delimiter: '(xlsx)',
+      headerRowIndex: 0,
+      notes: [],
+    };
+    const drafts = parseWechat(table, { accountId: 'wechat:main', format: 'xlsx' }).drafts;
+    return buildTransactions(drafts, {
+      batchId: 'new-batch',
+      rules: DEFAULT_RULES,
+      ...(existingRecords ? { existingRecords } : {}),
+    });
+  }
+
+  const asStored = (outcome: PipelineOutcome): Map<string, Transaction> =>
+    new Map(outcome.transactions.map((t) => [t.fingerprint, t]));
+
+  it('leaves the store alone when the file has not changed', () => {
+    const stored = asStored(runRows([OLD_IMPORT_ROW]));
+
+    const again = runRows([OLD_IMPORT_ROW], stored);
+
+    // Nothing to insert, nothing to rewrite: a repeated import is still a no-op.
+    expect(again.transactions).toHaveLength(0);
+    expect(again.updated).toHaveLength(0);
+    expect(again.duplicates).toHaveLength(1);
+  });
+
+  it('corrects a stored row the newer parse describes differently', () => {
+    const stored = asStored(runRows([OLD_IMPORT_ROW]));
+    const oldRow = [...stored.values()][0]!;
+
+    const again = runRows([NEW_IMPORT_ROW], stored);
+
+    expect(again.transactions).toHaveLength(0);
+    expect(again.duplicates).toHaveLength(0);
+    expect(again.updated).toHaveLength(1);
+
+    const { before, after, changes } = again.updated[0]!;
+    // Same transaction, so the fingerprint — and therefore the primary key — is
+    // unchanged: this is an update of one record, not a second record.
+    expect(before.fingerprint).toBe(after.fingerprint);
+    expect(after.id).toBe(oldRow.id);
+    expect(oldRow.amountMinor).toBe(15_400);
+    expect(after.amountMinor).toBe(14_500);
+    expect(changes).toContain('amount ¥154.00 -> ¥145.00');
+  });
+
+  it('carries the corrected row into the new batch', () => {
+    const stored = asStored(runRows([OLD_IMPORT_ROW]));
+
+    const again = runRows([NEW_IMPORT_ROW], stored);
+
+    // The newer batch is now the authority for the row, so it is also what has to
+    // be persisted — otherwise undoing it would not restore the old value.
+    expect(again.updated[0]!.after.importedBatchId).toBe('new-batch');
+    expect(again.updated[0]!.before.importedBatchId).toBe('new-batch');
+  });
+
+  it('preserves a user-set category while correcting the row', () => {
+    const stored = asStored(runRows([OLD_IMPORT_ROW]));
+    const fingerprint = [...stored.keys()][0]!;
+    stored.set(fingerprint, {
+      ...stored.get(fingerprint)!,
+      category: '日用品',
+      categorySource: 'user',
+    });
+
+    const again = runRows([NEW_IMPORT_ROW], stored);
+
+    // AGENTS.md §7. The amount moves; the user's label does not.
+    expect(again.updated[0]!.after.amountMinor).toBe(14_500);
+    expect(again.updated[0]!.after.category).toBe('日用品');
+    expect(again.updated[0]!.after.categorySource).toBe('user');
+  });
+
+  it('cannot correct anything when only fingerprints are supplied', () => {
+    const stored = asStored(runRows([OLD_IMPORT_ROW]));
+    const table = {
+      rows: [WECHAT_HEADERS, NEW_IMPORT_ROW].map((row) => row.map((c) => c.trim())),
+      delimiter: '(xlsx)',
+      headerRowIndex: 0,
+      notes: [],
+    };
+    const drafts = parseWechat(table, { accountId: 'wechat:main', format: 'xlsx' }).drafts;
+
+    const again = buildTransactions(drafts, {
+      batchId: 'new-batch',
+      rules: DEFAULT_RULES,
+      existingFingerprints: new Set(stored.keys()),
+    });
+
+    // With no content to compare against, the old skip-only behaviour stands.
+    expect(again.updated).toHaveLength(0);
+    expect(again.duplicates).toHaveLength(1);
+  });
+
+  it('still treats a repeat inside one batch as a duplicate, not as an update', () => {
+    // Otherwise an import could rewrite its own output row by row, and the last
+    // row of the pair would silently win.
+    const again = runRows([NEW_IMPORT_ROW, OLD_IMPORT_ROW]);
+
+    expect(again.transactions).toHaveLength(1);
+    expect(again.updated).toHaveLength(0);
+    expect(again.duplicates).toHaveLength(1);
   });
 });

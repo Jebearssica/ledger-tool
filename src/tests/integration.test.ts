@@ -5,11 +5,17 @@
  * encoding detection, archive unwrapping, platform routing and the pipeline all
  * exercised together.
  */
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it } from 'vitest';
 import { strToU8, zipSync } from 'fflate';
 import { inspectFile, parseInspected } from '../importers/index';
 import { buildTransactions } from '../domain/pipeline';
 import { DEFAULT_RULES } from '../domain/categories';
+import {
+  clearAllData,
+  getAllTransactions,
+  getExistingRecords,
+  saveImportBatch,
+} from '../storage/db';
 import { ALIPAY_CSV, ALIPAY_EXPECTED } from './fixtures/alipay';
 import { WECHAT_CSV, WECHAT_EXPECTED } from './fixtures/wechat';
 import type { Transaction } from '../domain/types';
@@ -176,6 +182,95 @@ describe('full path — WeChat', () => {
     const groceries = outcome.transactions.find((t) => t.rawDescription.includes('日用商品'));
     expect(groceries).toBeUndefined();
     expect(outcome.dropped.filter((d) => d.reason === 'refund-paired')).toHaveLength(2);
+  });
+});
+
+describe('full path — an overlapping re-import corrects what is stored', () => {
+  /**
+   * One ¥154.00 purchase, in the two shapes the parser produces either side of
+   * the fix for self-disclosed partial refunds.
+   *
+   * Both share a fingerprint, because it is built from the amount PRINTED on the
+   * statement — which netting deliberately leaves alone so that overlapping
+   * exports still dedupe. That is what makes this a correction to an existing
+   * transaction rather than a second transaction.
+   */
+  const statementFor = (status: string): string =>
+    [
+      '微信支付账单明细',
+      '交易时间,交易类型,交易对方,商品,收/支,金额(元),支付方式,当前状态,交易单号,商户单号,备注',
+      `2026-05-18 16:26,商户消费,示例商户,示例商品,支出,154.00,零钱,${status},4200003120202605181626000001,,`,
+    ].join('\n');
+
+  /**
+   * Exactly what the import panel does: read storage, run the pipeline against
+   * it, then persist both the new rows and the corrections.
+   */
+  async function importAndSave(fileName: string, text: string, batchId: string) {
+    const inspection = await inspectFile({ fileName, bytes: bytesOf(text) });
+    const parsed = parseInspected(inspection, { accountId: 'wechat:main' });
+    const outcome = buildTransactions(parsed.drafts, {
+      batchId,
+      rules: DEFAULT_RULES,
+      existingRecords: await getExistingRecords(),
+    });
+
+    await saveImportBatch(
+      {
+        id: batchId,
+        fileName,
+        sourceLabel: 'wechat',
+        importedAt: new Date().toISOString(),
+        inserted: outcome.transactions.length,
+        updated: outcome.updated.length,
+        duplicates: outcome.duplicates.length,
+        dropped: outcome.dropped.length,
+        notes: [],
+      },
+      [...outcome.transactions, ...outcome.updated.map((u) => u.after)].map((tx) => ({
+        ...tx,
+        importedBatchId: batchId,
+      })),
+    );
+
+    return outcome;
+  }
+
+  beforeEach(async () => {
+    await clearAllData();
+  });
+
+  it('replaces the stored row instead of skipping it, leaving one record', async () => {
+    const first = await importAndSave('old.csv', statementFor('交易成功'), 'b1');
+    expect(first.updated).toHaveLength(0);
+    expect((await getAllTransactions())[0]!.amountMinor).toBe(15_400);
+
+    const second = await importAndSave('new.csv', statementFor('已退款(¥9.00)'), 'b2');
+
+    expect(second.transactions).toHaveLength(0);
+    expect(second.updated).toHaveLength(1);
+
+    const stored = await getAllTransactions();
+    // Still ONE transaction: this corrected a record, it did not add one.
+    expect(stored).toHaveLength(1);
+    expect(stored[0]!.amountMinor).toBe(14_500);
+    expect(stored[0]!.kind).toBe('expense');
+    // The newer batch owns it now, so undoing that batch can undo the change.
+    expect(stored[0]!.importedBatchId).toBe('b2');
+  });
+
+  it('stays a true no-op when nothing changed', async () => {
+    await importAndSave('old.csv', statementFor('交易成功'), 'b1');
+    const again = await importAndSave('old.csv', statementFor('交易成功'), 'b2');
+
+    expect(again.transactions).toHaveLength(0);
+    expect(again.updated).toHaveLength(0);
+    expect(again.duplicates).toHaveLength(1);
+
+    const stored = await getAllTransactions();
+    expect(stored).toHaveLength(1);
+    // Untouched, provenance included: an unchanged re-import must not churn.
+    expect(stored[0]!.importedBatchId).toBe('b1');
   });
 });
 

@@ -208,6 +208,7 @@ export default function TransactionList({ transactions, batches, onChanged }: Pr
                   <th>文件</th>
                   <th>来源</th>
                   <th className="num">新增</th>
+                  <th className="num">更新</th>
                   <th className="num">重复</th>
                   <th className="num">排除</th>
                   <th />
@@ -220,6 +221,7 @@ export default function TransactionList({ transactions, batches, onChanged }: Pr
                     <td>{batch.fileName}</td>
                     <td className="muted">{batch.sourceLabel}</td>
                     <td className="num">{batch.inserted}</td>
+                    <td className="num">{batch.updated ?? '—'}</td>
                     <td className="num">{batch.duplicates}</td>
                     <td className="num">{batch.dropped}</td>
                     <td>
@@ -234,6 +236,7 @@ export default function TransactionList({ transactions, batches, onChanged }: Pr
           </div>
           <p className="small muted" style={{ marginTop: 10 }}>
             撤销会删除该批次导入的全部记录。之后重新导入同一文件可以原样恢复。
+            若某条记录被更晚的导入修正过，它归属于那个更晚的批次。
           </p>
         </div>
       )}

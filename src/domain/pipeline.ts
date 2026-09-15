@@ -24,6 +24,7 @@ import { classifyKind, disclosedPartialRefundMinor, isClosedOrFailed, isRefundRo
 import { formatMinor } from './money';
 import { fingerprintPreimage, fingerprint, transactionIdFromFingerprint, FINGERPRINT_VERSION } from './fingerprint';
 import { pairInternalTransfers, type PairingOptions, type TransferPair } from './transfers';
+import { reconcileOverlap, type UpdatedRow } from './reconcile';
 
 export type DropReason = 'closed-or-failed' | 'refund-paired' | 'refund-partial' | 'duplicate';
 
@@ -46,6 +47,16 @@ export interface PipelineContext {
   pairing?: Partial<PairingOptions>;
   /** Fingerprints already in storage; anything matching is skipped. */
   existingFingerprints?: ReadonlySet<string>;
+  /**
+   * Records already in storage, keyed by fingerprint, WITH their content.
+   *
+   * Supplying this is what lets an overlapping import CORRECT a row it
+   * re-describes instead of being skipped as a duplicate — the store is no
+   * longer append-only. `existingFingerprints` carries no content, so given only
+   * that, an already-imported row can be skipped but never corrected. See
+   * `reconcile.ts` and AGENTS.md §5.
+   */
+  existingRecords?: ReadonlyMap<string, Transaction>;
 }
 
 export interface PipelineOutcome {
@@ -56,6 +67,13 @@ export interface PipelineOutcome {
    * import) and were therefore skipped. This is what makes imports idempotent.
    */
   duplicates: Transaction[];
+  /**
+   * Stored rows that this import corrects, each with what changed and why.
+   *
+   * These are as new as anything in `transactions` and must be persisted the
+   * same way. Empty unless `existingRecords` was supplied.
+   */
+  updated: UpdatedRow[];
   dropped: DroppedRow[];
   pairs: TransferPair[];
   warnings: ParseWarning[];
@@ -357,33 +375,64 @@ export function buildTransactions(
     isCategorisable(tx) ? categorizeTransaction(tx, context.rules) : { ...tx, categorySource: 'none' as const },
   );
 
-  // ---- 6. Deduplicate ----------------------------------------------------
-  // The fingerprint is the idempotency key. Checking against existing storage
-  // AND against rows already seen in this batch keeps a double-submitted file
-  // from changing a single total.
-  const seen = new Set<string>(context.existingFingerprints ?? []);
+  // ---- 6. Deduplicate, or correct what is already stored ------------------
+  // The fingerprint is the identity of a transaction across imports, so a row
+  // that re-describes a stored one is either an identical duplicate — skipped, so
+  // a double-submitted file still changes nothing — or a correction, applied so
+  // that re-importing a period after a parser or classifier fix takes effect.
+  const known = context.existingRecords;
+  const skipOnly = context.existingFingerprints;
   const fresh: Transaction[] = [];
+  const updated: UpdatedRow[] = [];
   const duplicates: Transaction[] = [];
+  /** Fingerprints this batch has already accounted for, in either direction. */
+  const handled = new Set<string>();
+
+  const skip = (tx: Transaction): void => {
+    duplicates.push(tx);
+    dropped.push({
+      reason: 'duplicate',
+      detail: 'Already imported (matching fingerprint); skipped to keep totals unchanged.',
+      preview: preview({
+        source: tx.source,
+        occurredAt: tx.occurredAt,
+        amountMinor: tx.amountMinor,
+        direction: tx.direction,
+        description: tx.rawDescription,
+      } as DraftTransaction),
+    });
+  };
 
   for (const tx of transactions) {
-    if (seen.has(tx.fingerprint)) {
-      duplicates.push(tx);
-      dropped.push({
-        reason: 'duplicate',
-        detail: 'Already imported (matching fingerprint); skipped to keep totals unchanged.',
-        preview: preview({
-          source: tx.source,
-          occurredAt: tx.occurredAt,
-          amountMinor: tx.amountMinor,
-          direction: tx.direction,
-          description: tx.rawDescription,
-        } as DraftTransaction),
-      });
+    // A fingerprint this batch already handled keeps its old meaning: within one
+    // file a repeated fingerprint is still just a duplicate, so an import can
+    // never rewrite its own output row by row.
+    if (handled.has(tx.fingerprint)) {
+      skip(tx);
       continue;
     }
-    seen.add(tx.fingerprint);
+    handled.add(tx.fingerprint);
+
+    const stored = known?.get(tx.fingerprint);
+    if (stored) {
+      const correction = reconcileOverlap(stored, tx);
+      if (correction) {
+        updated.push(correction);
+        continue;
+      }
+      // Byte-for-byte the same transaction: nothing to record and nothing to
+      // churn, which is what keeps a repeated import a true no-op.
+      skip(tx);
+      continue;
+    }
+
+    if (skipOnly?.has(tx.fingerprint)) {
+      skip(tx);
+      continue;
+    }
+
     fresh.push(tx);
   }
 
-  return { transactions: fresh, duplicates, dropped, pairs: paired.pairs, warnings };
+  return { transactions: fresh, duplicates, updated, dropped, pairs: paired.pairs, warnings };
 }

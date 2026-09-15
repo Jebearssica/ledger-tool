@@ -19,6 +19,12 @@ export interface ImportBatch {
   importedAt: string;
   inserted: number;
   duplicates: number;
+  /**
+   * Stored rows this batch corrected. Optional because batches written before
+   * overlap correction existed have no such field; no schema migration is needed
+   * since it is not indexed.
+   */
+  updated?: number;
   dropped: number;
   notes: string[];
 }
@@ -126,6 +132,23 @@ export async function getExistingFingerprints(): Promise<Set<string>> {
 
   await tx.done;
   return fingerprints;
+}
+
+/**
+ * Records already stored, keyed by fingerprint.
+ *
+ * The pipeline needs the CONTENT, not merely the keys, so that a re-import can
+ * correct a row it already holds instead of being skipped (AGENTS.md §5).
+ * `getExistingFingerprints` stays for callers that only need membership.
+ *
+ * This reads whole records rather than a key cursor, deliberately: the content is
+ * the point, and a personal ledger is small enough that the difference is
+ * academic next to the parse that produced it.
+ */
+export async function getExistingRecords(): Promise<Map<string, Transaction>> {
+  const db = await openLedgerDb();
+  const all = await db.getAll('transactions');
+  return new Map(all.map((tx) => [tx.fingerprint, tx]));
 }
 
 export async function getTransactionsByBatch(batchId: string): Promise<Transaction[]> {

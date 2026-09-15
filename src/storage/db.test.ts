@@ -5,6 +5,7 @@ import {
   deleteBatch,
   getAllTransactions,
   getExistingFingerprints,
+  getExistingRecords,
   getSetting,
   listBatches,
   openLedgerDb,
@@ -67,6 +68,17 @@ describe('saveImportBatch', () => {
     expect(fingerprints).toEqual(new Set(['fp_1', 'fp_2']));
   });
 
+  it('exposes whole records, which is what lets a re-import correct them', async () => {
+    // Membership alone can only ever skip a row; the content is what allows an
+    // overlapping import to update it (AGENTS.md §5).
+    await saveImportBatch(batch(), [tx({ amountMinor: 2850 })]);
+
+    const records = await getExistingRecords();
+    expect([...records.keys()]).toEqual(['fp_1']);
+    expect(records.get('fp_1')!.amountMinor).toBe(2850);
+    expect(records.get('fp_1')!.rawDescription).toBe('午餐');
+  });
+
   it('returns transactions newest first', async () => {
     await saveImportBatch(batch(), [
       tx({ id: 'tx_old', fingerprint: 'fp_old', occurredAt: '2026-09-01T00:00:00.000Z' }),
@@ -89,6 +101,23 @@ describe('the unique fingerprint index', () => {
         [tx({ id: 'tx_different_id', fingerprint: 'fp_1' })],
       ),
     ).rejects.toThrow();
+  });
+
+  it('updates a row in place when its id and fingerprint are unchanged', async () => {
+    // The id is derived from the fingerprint, so a correction to the same
+    // transaction rewrites the same record rather than colliding with it. This is
+    // the mechanism the overlap update relies on.
+    await saveImportBatch(batch(), [tx({ amountMinor: 15_400, kind: 'refund' })]);
+    await saveImportBatch(
+      batch({ id: 'b2' }),
+      [tx({ amountMinor: 14_500, kind: 'expense', importedBatchId: 'b2' })],
+    );
+
+    const stored = await getAllTransactions();
+    expect(stored).toHaveLength(1);
+    expect(stored[0]!.amountMinor).toBe(14_500);
+    expect(stored[0]!.kind).toBe('expense');
+    expect(stored[0]!.importedBatchId).toBe('b2');
   });
 });
 
