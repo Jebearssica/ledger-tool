@@ -303,6 +303,13 @@ npm run check:no-plaintext   # block plaintext financial data
 - Node 不在 PATH 上，装在 `%LOCALAPPDATA%\nodejs`；用前先 `$env:PATH = "$env:LOCALAPPDATA\nodejs;$env:PATH"`。
 - 用 **`npm.cmd`** 而不是 `npm` —— PowerShell 执行策略会拦截 `npm.ps1`。
 - 终端若显示中文乱码，先 `[Console]::OutputEncoding = [System.Text.Encoding]::UTF8`。
+- **`git push` 需要 HTTP/1.1**。本机网络下 HTTP/2 的 POST 会稳定返回 `502`（`RPC failed`、`send-pack: unexpected disconnect`），而同一网络的 `git fetch` 正常 —— 因为 fetch 用 GET、push 用 POST。修法是仓库级设置：
+
+  ```bash
+  git config --local http.version HTTP/1.1
+  ```
+
+  只影响本仓库，不动全局配置。若换网络后恢复正常，可以删掉这行。
 
 ---
 
