@@ -47,9 +47,12 @@ Personal expense tracker: import Alipay / WeChat Pay / bank statements → dedup
 | 解析 | **全部在客户端完成**（流水文件永远不离开用户设备）：`papaparse` (CSV/TXT)、`read-excel-file` (XLSX)、`pdfjs-dist` (PDF)、`fflate` (`.zip`)。**全部懒加载**，见 §2.1 |
 | 本地存储 | IndexedDB（经 `idb`） |
 | 云端备份 | 加密快照（见 §3）；**手动导出**，Actions 只校验 |
+| 发布 | GitHub Pages（`.github/workflows/pages.yml`）；`base: './'` 以适配子路径 |
 | 测试 | vitest；夹具为**合成数据** |
 | 后端 | **无 / none** —— 见下方说明 |
 | CI | Node 24 + GitHub Actions，仅做校验/备份 |
+
+**安全上下文是运行期约束，不只是部署细节**：PWA 安装（Service Worker）与加密快照（`crypto.subtle`）都只在 **HTTPS 或 `http://localhost`** 下可用。局域网 `http://192.168.x.x` 打开时二者都失效，但**导入与统计仍正常** —— 代码必须继续支持这种降级使用（`crypto/snapshot.ts` 的 `isWebCryptoAvailable()`，UI 据此提前禁用按钮并说明原因），不要假设 crypto 一定存在。
 
 ### 2.1 解析依赖取舍 / Parser dependency tradeoffs
 
@@ -270,6 +273,9 @@ Transaction {
 - 用 `GITHUB_TOKEN` push 产生的提交**不会触发其他 workflow**（递归保护）。不要设计链式触发。
 - 仓库 60 天无活动后定时任务会被自动停用 → 必须提供明确的手动触发方式。
 - 不要在 Actions 中解密用户数据；解密只发生在用户设备上。
+- **发布工作流必须自带校验**（`.github/workflows/pages.yml` 里有意的重复）。不要用 `workflow_run` 去依赖 `ci.yml`：那会增加一层隐式耦合，而「main 绿 = 线上可用」应该是同一个条件，不是两个工作流互相约定。
+- **`base` 必须保持相对（`'./'`）**。GitHub Pages 的项目站点发布在 `/<repo>/` 子路径下，绝对路径 `/assets/...` 会 404。Pages 工作流里有一条断言专门挡这个回归。也不要引入 `configure-pages`：它主要用于把探测到的 base 喂给生成器，而这里不需要。
+- 服务端渲染与 URL 路由都没有用到（标签页是 `useState`，不是路由），所以**不需要 `404.html` 回退**。若将来引入路由，必须同时补上回退页，否则子路径刷新会 404。
 
 ---
 
@@ -317,7 +323,7 @@ npm run check:no-plaintext   # block plaintext financial data
 
 ## 13. 仍待定 / Still open
 
-1. **尚未配置 GitHub Pages 部署** —— 这**阻塞了 Android 端的正常使用**。`vite.config.ts` 已设 `base: './'`，构建产物可直接托管，但仓库里还没有 Pages workflow。没有 HTTPS 地址就无法「添加到主屏幕」，也无法使用加密备份（`crypto.subtle` 在非安全上下文下不存在，见 §2.1 与 README）。
+1. ~~尚未配置 GitHub Pages 部署~~ **已解决**：`.github/workflows/pages.yml` 已就绪（校验通过才发布，且不依赖 `configure-pages`，因为 `base: './'` 让它对子路径与根路径都成立）。**子路径已实测**：Service Worker 作用域、manifest、资源与懒加载 chunk 在 `/repo/` 下均正常。**仍需用户手动完成**：建远端仓库、`git push`、在 Settings → Pages 把 Source 选为「GitHub Actions」（只推 workflow 不会自动开启）。另外仓库名建议用 ASCII（如 `ledger-tool`），因为本地目录名 `记账工具` 会出现在 URL 里并被百分号编码。
 2. **分类规则表还不能在 UI 里编辑**。§7 要求「规则与数据分离」，目前规则仍是 `DEFAULT_RULES` 常量；IndexedDB 里已有 `rules` store，但界面未接。
 3. **多份快照的命名与保留策略未定**。当前由用户自行命名并放置，仓库里还没有 `data/` 约定。
 4. **2 分钟时间桶的合并阈值未按真实数据校准**（见 §5）。若实际出现误合并，需要调整 `TIME_WINDOW_MINUTES`，而**那会改变指纹**，必须同时递增 `FINGERPRINT_VERSION` 并写迁移。

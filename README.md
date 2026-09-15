@@ -88,24 +88,47 @@ npm run preview    # 默认 http://localhost:4173
 
 > 实测确认：在 `http://192.168.x.x` 下，`crypto.subtle` 为 `undefined`，Service Worker 注册数为 0。此时**导入与统计仍可用**，但无法安装、无法备份（应用会明确说明原因并禁用备份按钮，而不是报错）。
 
-### 部署步骤（任选一个静态 HTTPS 托管）
+### 部署步骤（GitHub Pages）
 
-构建产物是纯静态文件，`vite.config.ts` 里已设 `base: './'`，因此可放在任意子路径下。
+仓库里已有 workflow [`.github/workflows/pages.yml`](./.github/workflows/pages.yml)，它会**先跑一遍校验**（隐私守卫 + 类型检查 + 单测），全部通过后才构建并发布 —— 所以「main 是绿的」和「线上是可用的」是同一个条件。构建失败或测试红，就不会发布。
+
+#### 1. 创建远端仓库并推送
+
+GitHub 的仓库名只允许 ASCII，而本地目录名是 `记账工具`。**建议用 `ledger-tool`**（与 `package.json` 的 `name` 一致）；中文名会出现在 URL 里并被百分号编码成 `%E8%AE%B0...`，能跑但很难看也难分享。
+
+```powershell
+# 在 GitHub 上先建好空仓库（不要勾选任何模板文件），然后：
+git remote add origin https://github.com/<你的用户名>/ledger-tool.git
+git push -u origin main
+```
+
+#### 2. 打开 Pages 开关（只需一次）
+
+仓库 → **Settings → Pages → Build and deployment → Source** 选 **「GitHub Actions」**。
+
+> 这一步是必须的。只推送 workflow 并不会自动开启 Pages，首次运行会因 Pages 未启用而失败。
+
+开关打开后，到 **Actions** 标签页手动运行一次 `Deploy to GitHub Pages`（或再 push 一次）。
+
+#### 3. 拿到地址
+
+形如 `https://<你的用户名>.github.io/ledger-tool/`。
+
+路径是子目录，这是最容易出错的地方 —— 本项目的 `base: './'`（相对路径）已经过实测：Service Worker 作用域、manifest、静态资源、以及懒加载的 PDF/XLSX chunk 在该子路径下全部正常解析。
+
+若仓库取名 `<你的用户名>.github.io`，则发布在根路径 `https://<你的用户名>.github.io/`，同样可用。
+
+#### 4. 手机安装
+
+用手机 Chrome 打开该地址 → 菜单 → **「添加到主屏幕」**。之后从桌面图标启动即为独立窗口，且离线可用。
+
+### 其他静态托管
+
+不局限于 Pages。产物是纯静态文件、且用相对路径，所以可直接拖给 **Cloudflare Pages / Netlify / Vercel**，或放进任意 HTTPS 主机的子目录。
 
 ```powershell
 npm run build      # 产物在 dist/
 ```
-
-- **GitHub Pages**（与本仓库最契合，但**尚未配置**，见 `AGENTS.md` §13）
-- **Cloudflare Pages / Netlify / Vercel**：把 `dist/` 拖上去即可
-- 任意自有 HTTPS 主机
-
-部署后：
-
-1. 手机 Chrome 打开该 HTTPS 地址
-2. 确认功能正常（导入一份账单试试）
-3. 菜单 → **「添加到主屏幕」**
-4. 之后从桌面图标启动，即为独立窗口、且离线可用
 
 ### 手机上的账单从哪来
 
@@ -188,7 +211,7 @@ src/
 
 诚实列出，避免误用：
 
-- **Android 端需要 HTTPS 地址**（最要紧的一条）。PWA 安装与加密备份都要求安全上下文，而手机访问 `http://192.168.x.x` **不算**安全上下文。在那种情况下导入与统计正常，但无法安装、无法备份。推荐部署到 GitHub Pages（**尚未配置**，见 `AGENTS.md` §13）。
+- **Android 端需要 HTTPS 地址**（最要紧的一条）。PWA 安装与加密备份都要求安全上下文，而手机访问 `http://192.168.x.x` **不算**安全上下文。在那种情况下导入与统计正常，但无法安装、无法备份。仓库里已备好 Pages workflow（见下），需要你先建远端仓库并在 Settings 里启用 Pages。
 - **Windows 与 Android 是两个独立账本，不自动同步**。设备间搬运数据要走「导出快照 → 在另一台恢复」，且恢复是**整体替换**。
 - **构建产物不能双击打开**。ES module 在 `file://` 下会被标准 Chrome/Edge 拦截，必须用 HTTP 提供（`npm run preview`）。
 - **真正的二进制 `.xls`（OLE/CFB）不支持**。很多银行把 TSV 或 HTML 表格命名为 `.xls`，那些**可以**读；但真 OLE 文件需要专门解析器，工具会明确报错并让你改导出 CSV/XLSX。
@@ -218,3 +241,4 @@ Expand-Archive "$env:TEMP\node.zip" -DestinationPath "$env:LOCALAPPDATA\nodejs" 
 
 - [`plan.md`](./plan.md) —— 需求（要做什么）
 - [`AGENTS.md`](./AGENTS.md) —— 约束（怎么做），含隐私不变量与领域规则
+- [`.github/workflows/pages.yml`](./.github/workflows/pages.yml) —— 发布到 GitHub Pages

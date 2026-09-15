@@ -1,0 +1,86 @@
+name: Deploy to GitHub Pages
+
+# Publishing is not a good place to find out the tests were red, so this workflow
+# re-runs the same checks as ci.yml and will not deploy if any of them fail.
+# The duplication is intentional: it makes "green main" and "deployed" the same
+# condition, instead of relying on two workflows agreeing with each other.
+#
+# Note there is no `actions/configure-pages` step. That action exists mainly to
+# feed a detected base path to a generator, but this app builds with a RELATIVE
+# base (`base: './'`), so it works unchanged at a project path such as
+# /ledger-tool/ and at a root user site alike.
+on:
+  push:
+    branches: [main]
+  # Needed because the very first deployment has to be triggered by hand once
+  # Pages is switched on in the repository settings.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deployments race for the single Pages environment. Unlike a
+# normal CI run, cancelling a half-finished deploy would leave the live site in
+# an undefined state, so in-flight runs are allowed to finish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24.x
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      # Re-publishing is still publishing, so the privacy gate runs here too.
+      - name: Block plaintext financial data
+        run: npm run check:no-plaintext
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      # Catches a broken build before it reaches the live URL, and makes the
+      # deployed bytes visibly identical to a local `npm run build`.
+      - name: Verify the build produced a usable site
+        run: |
+          test -f dist/index.html
+          test -f dist/sw.js
+          test -f dist/manifest.webmanifest
+          test -f dist/.nojekyll
+          # The entry chunk must reference its assets relatively, or the site
+          # would break when served from /<repo>/ instead of /.
+          if grep -qE '(src|href)="/assets/' dist/index.html; then
+            echo "::error::dist/index.html uses absolute /assets/ paths. It will 404 at a project path."
+            exit 1
+          fi
+          echo "Built $(du -sh dist | cut -f1) across $(find dist -type f | wc -l) files."
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
