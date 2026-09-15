@@ -4,7 +4,7 @@ import { DEFAULT_CATEGORIES } from '../domain/categories';
 import { formatMinor } from '../domain/money';
 import { formatShanghai, shanghaiMonth } from '../domain/dates';
 import { setTransactionCategory, deleteBatch, type ImportBatch } from '../storage/db';
-import { amountClass, isCashflow, kindBadgeClass, kindLabel } from './format';
+import { amountClass, isCashflow, kindBadgeClass, kindLabel, refundNettedNote } from './format';
 
 interface Props {
   transactions: Transaction[];
@@ -156,6 +156,9 @@ export default function TransactionList({ transactions, batches, onChanged }: Pr
                   <td>
                     {tx.rawDescription}
                     {tx.counterparty ? <span className="muted"> · {tx.counterparty}</span> : null}
+                    {refundNettedNote(tx.meta) ? (
+                      <span className="muted"> · {refundNettedNote(tx.meta)}</span>
+                    ) : null}
                   </td>
                   <td>
                     <span className={kindBadgeClass(tx.kind)}>{kindLabel(tx.kind)}</span>

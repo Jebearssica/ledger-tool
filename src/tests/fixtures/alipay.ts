@@ -87,3 +87,65 @@ export const ALIPAY_LEGACY_CSV = [
   '交易号,商家订单号,交易创建时间,付款时间,最近修改时间,交易来源地,类型,交易对方,商品名称,金额（元）,收/支,交易状态,服务费（元）,成功退款（元）,备注,资金状态',
   '2026090100001,,2026-09-01 08:12:33,,,,,示例餐厅,午餐,28.50,支出,交易成功,,,,',
 ].join('\n');
+
+/**
+ * SYNTHETIC fixture for the four ways a refund can relate to its purchase.
+ *
+ * Cash flow cannot tell these apart, which is why each one is asserted on
+ * separately (AGENTS.md §5):
+ *
+ *   partial   refund < purchase, so only a difference came back
+ *   cancelled refund of an order the platform then marked 交易关闭
+ *   overshoot refund larger than the purchase it claims to reverse
+ *   orphan    refund whose purchase is not in this file at all
+ */
+export const ALIPAY_REFUND_ROWS = {
+  /** Order 2026090200100, ¥43.19 — groceries, of which ¥0.30 came back. */
+  partialPurchase:
+    '2026-09-02 12:00:00,餐饮美食,示例生鲜,shop@example.test,示例生鲜订单,支出,43.19,余额宝,交易成功,2026090200100,',
+  /** Same order id + a suffix, smaller amount: must NOT be read as unmatched. */
+  partialRefund:
+    '2026-09-02 12:05:00,退款,示例生鲜,shop@example.test,退款-示例生鲜订单,不计收支,0.30,余额宝,退款成功,2026090200100R001,',
+  /** Never settled, so it never became spending… */
+  cancelledPurchase:
+    '2026-09-03 10:00:00,交通出行,示例铁路,rail@example.test,示例车票,支出,159.50,余额,交易关闭,2026090300200,',
+  /** …and this row merely reverses that failed payment. Benign, not a warning. */
+  cancelledRefund:
+    '2026-09-05 10:00:00,退款,示例铁路,rail@example.test,退款-示例车票,不计收支,159.50,余额,退款成功,2026090300200M001,',
+  /** A small purchase… */
+  smallPurchase:
+    '2026-09-06 10:00:00,购物,示例商店,shop2@example.test,示例小商品,支出,10.00,余额,交易成功,2026090600300,',
+  /** …with a refund larger than it. Netting would invent a negative expense. */
+  overRefund:
+    '2026-09-07 10:00:00,退款,示例商店,shop2@example.test,退款-示例小商品,不计收支,12.00,余额,退款成功,2026090600300R001,',
+  /** No purchase carrying this order id appears anywhere in the file. */
+  orphanRefund:
+    '2026-09-08 10:00:00,退款,示例商户,other@example.test,退款-外部订单,不计收支,5.00,余额,退款成功,2026090800400,',
+};
+
+export const ALIPAY_REFUND_CSV = [
+  '支付宝交易记录明细查询',
+  '账号:[synthetic@example.test]',
+  '起始日期:[2026-09-01 00:00:00]    终止日期:[2026-09-30 23:59:59]',
+  '',
+  '---------------------------------交易记录明细列表------------------------------------',
+  '',
+  '交易时间,交易分类,交易对方,对方账号,商品说明,收/支,金额,收/付款方式,交易状态,交易订单号,商家订单号',
+  ALIPAY_REFUND_ROWS.partialPurchase,
+  ALIPAY_REFUND_ROWS.partialRefund,
+  ALIPAY_REFUND_ROWS.cancelledPurchase,
+  ALIPAY_REFUND_ROWS.cancelledRefund,
+  ALIPAY_REFUND_ROWS.smallPurchase,
+  ALIPAY_REFUND_ROWS.overRefund,
+  ALIPAY_REFUND_ROWS.orphanRefund,
+  '',
+].join('\n');
+
+export const ALIPAY_REFUND_EXPECTED = {
+  rowsRead: 7,
+  /** 43.19 − 0.30, the cancelled refund, the over-refund and the orphan. */
+  kept: 4,
+  /** The ¥0.30 difference is subtracted from real spending, not from nothing. */
+  expenseMinor: 4289,
+  incomeMinor: 0,
+};

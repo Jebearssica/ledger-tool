@@ -76,6 +76,19 @@ export interface DraftTransaction {
   excludedFromCashflow: boolean;
   /** Verbatim source fields, kept for auditing and for template debugging. */
   raw: Record<string, string>;
+  /**
+   * Set by the pipeline, NEVER by an importer.
+   *
+   * When a partial refund was netted against this row, `amountMinor` has already
+   * been reduced by this many minor units. `amountMinor + refundNettedMinor` is
+   * therefore the figure printed on the statement.
+   *
+   * The fingerprint deliberately uses that pre-adjustment figure: two overlapping
+   * exports of the same period (a monthly file and a yearly file) must still
+   * produce the same fingerprint even when only one of them carries the refund
+   * row, otherwise the purchase would be imported twice. See AGENTS.md §5.
+   */
+  refundNettedMinor?: number;
 }
 
 /** A deduplicated, categorised, persisted record. */

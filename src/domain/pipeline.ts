@@ -4,7 +4,9 @@
  * Stage order matters and is not arbitrary:
  *
  *   1. drop impossible rows   (a closed transaction never happened)
- *   2. pair refunds           (needs orderId + amount, so must precede hashing)
+ *   2. pair refunds           (needs orderId, so must precede hashing; full
+ *                              refunds remove both rows, partial refunds reduce
+ *                              the purchase's amount in place)
  *   3. convert to transactions(assign kind, fingerprint)
  *   4. pair transfers         (may reclassify expense/income → transfer-internal)
  *   5. categorise             (after pairing, so transfers are never categorised)
@@ -19,10 +21,11 @@ import type {
 } from './types';
 import { categorize, type CategoryRule } from './categories';
 import { classifyKind, isClosedOrFailed, isRefundRow } from './classify';
+import { formatMinor } from './money';
 import { fingerprintPreimage, fingerprint, transactionIdFromFingerprint, FINGERPRINT_VERSION } from './fingerprint';
 import { pairInternalTransfers, type PairingOptions, type TransferPair } from './transfers';
 
-export type DropReason = 'closed-or-failed' | 'refund-paired' | 'duplicate';
+export type DropReason = 'closed-or-failed' | 'refund-paired' | 'refund-partial' | 'duplicate';
 
 export interface DroppedRow {
   reason: DropReason;
@@ -69,17 +72,36 @@ function preview(draft: DraftTransaction): DroppedRow['preview'] {
 }
 
 /**
- * Refunds are not income.
+ * Refunds are not income, and a partial refund is not a full one.
  *
  * Alipay records a refund as its own row: `交易状态 = 退款成功`, `交易分类 = 退款`.
  * If it is left in, the original purchase counts as an expense AND the refund
- * counts as income, so both sides are overstated by the same amount. Matching
- * them and removing both is the only correct outcome.
+ * counts as income, so both sides are overstated by the same amount.
  *
  * Matching rule (AGENTS.md §5): the refund's order id has the original's order
- * id as a prefix, and the amounts are equal.
+ * id as a prefix. The AMOUNTS must not be required to match — that was the v1
+ * rule, and it is wrong for the single most common real case. A grocery
+ * substitution ("多退少补") refunds the price difference, so a year of real data
+ * contained 21 refunds of ¥0.11–¥1.25 against ¥39–¥48 orders, every one of which
+ * v1 reported as "no matching purchase". Netting a ¥0.30 refund against a ¥43.19
+ * purchase as if it were a full refund would erase ¥42.89 of real spending, so
+ * the distinction has to be made explicitly:
+ *
+ *   refund == purchase  → full refund    → remove BOTH rows
+ *   refund <  purchase  → partial refund → keep the purchase, reduced by the
+ *                                          refund. Net cashflow is then exact.
+ *   refund >  purchase  → anomaly        → remove the purchase, keep the refund
+ *                                          unbudgeted and warn; never invent a
+ *                                          negative expense.
+ *
+ * A refund whose purchase the platform marked 交易关闭 is NOT an anomaly: the
+ * "refund" is the reversal of a payment that never happened. Ten of those occur
+ * in one year of real data, and warning about them is pure noise.
  */
-function pairRefunds(drafts: readonly DraftTransaction[]): {
+function pairRefunds(
+  drafts: readonly DraftTransaction[],
+  closedOrderIds: ReadonlySet<string>,
+): {
   kept: DraftTransaction[];
   dropped: DroppedRow[];
   warnings: ParseWarning[];
@@ -87,6 +109,13 @@ function pairRefunds(drafts: readonly DraftTransaction[]): {
   const dropped: DroppedRow[] = [];
   const warnings: ParseWarning[] = [];
   const removed = new Set<number>();
+  /** Refund money already netted against each purchase row, by draft index. */
+  const netted = new Map<number, number>();
+
+  const nettedOf = (index: number): number => netted.get(index) ?? 0;
+  /** What is left of a purchase once earlier refunds in this file took their cut. */
+  const remainingOf = (index: number): number =>
+    (drafts[index]?.amountMinor ?? 0) - nettedOf(index);
 
   drafts.forEach((refund, refundIndex) => {
     if (!isRefundRow(refund)) return;
@@ -102,47 +131,101 @@ function pairRefunds(drafts: readonly DraftTransaction[]): {
 
     const originalIndex = drafts.findIndex((candidate, candidateIndex) => {
       if (candidateIndex === refundIndex || removed.has(candidateIndex)) return false;
-      if (candidate.amountMinor !== refund.amountMinor) return false;
+      // A refund is never the original purchase of another refund.
+      if (isRefundRow(candidate)) return false;
       const candidateOrderId = candidate.orderId ?? '';
       if (candidateOrderId === '') return false;
-      return refundOrderId.startsWith(candidateOrderId);
+      if (!refundOrderId.startsWith(candidateOrderId)) return false;
+      return remainingOf(candidateIndex) > 0;
     });
 
     if (originalIndex === -1) {
-      warnings.push({
-        code: 'refund-unmatched',
-        message: `Refund (order ${refundOrderId.slice(0, 12)}…) has no matching purchase in this import. It is kept as "refund" and excluded from totals.`,
+      // A purchase already dropped for being closed explains this exactly.
+      const reversesFailedPayment = [...closedOrderIds].some((id) =>
+        refundOrderId.startsWith(id),
+      );
+      if (!reversesFailedPayment) {
+        warnings.push({
+          code: 'refund-unmatched',
+          message: `Refund (order ${refundOrderId.slice(0, 12)}…) has no matching purchase in this import. It is kept as "refund" and excluded from totals.`,
+        });
+      }
+      return;
+    }
+
+    const original = drafts[originalIndex]!;
+    const remaining = remainingOf(originalIndex);
+    const leftover = refund.amountMinor - remaining;
+
+    if (leftover === 0) {
+      removed.add(refundIndex);
+      removed.add(originalIndex);
+      dropped.push({
+        reason: 'refund-paired',
+        detail: 'Refund and its original purchase cancelled each other out.',
+        preview: preview(refund),
+      });
+      dropped.push({
+        reason: 'refund-paired',
+        detail: 'Original purchase, cancelled by a matching refund.',
+        preview: preview(original),
       });
       return;
     }
 
-    removed.add(refundIndex);
+    if (leftover < 0) {
+      // Partial refund: only the difference came back, so the purchase stays as
+      // real spending but for less. Both halves have to disappear from the row
+      // list, or the refund would still be counted as income (AGENTS.md §5).
+      removed.add(refundIndex);
+      netted.set(originalIndex, nettedOf(originalIndex) + refund.amountMinor);
+      dropped.push({
+        reason: 'refund-partial',
+        detail: `Partial refund of ${formatMinor(refund.amountMinor)} netted against the purchase, which is kept at the reduced amount. No warning: totals are exact.`,
+        preview: preview(refund),
+      });
+      return;
+    }
+
+    // The refund returns more than the purchase we hold. Netting would produce a
+    // negative expense, so drop the purchase outright and surface the excess
+    // instead of guessing what it is.
     removed.add(originalIndex);
     dropped.push({
       reason: 'refund-paired',
-      detail: 'Refund and its original purchase cancelled each other out.',
-      preview: preview(refund),
-    });
-    dropped.push({
-      reason: 'refund-paired',
       detail: 'Original purchase, cancelled by a matching refund.',
-      preview: preview(drafts[originalIndex]!),
+      preview: preview(original),
+    });
+    warnings.push({
+      code: 'refund-exceeds-purchase',
+      message: `Refund (order ${refundOrderId.slice(0, 12)}…) returns ${formatMinor(refund.amountMinor)} for a purchase of ${formatMinor(remaining)}. The purchase was cancelled, but the difference of ${formatMinor(leftover)} is not counted anywhere — please check it.`,
     });
   });
 
-  return {
-    kept: drafts.filter((_, i) => !removed.has(i)),
-    dropped,
-    warnings,
-  };
+  const kept = drafts
+    .map((draft, index) => {
+      if (removed.has(index)) return null;
+      const deducted = nettedOf(index);
+      if (deducted === 0) return draft;
+      return { ...draft, amountMinor: draft.amountMinor - deducted, refundNettedMinor: deducted };
+    })
+    .filter((draft): draft is DraftTransaction => draft !== null);
+
+  return { kept, dropped, warnings };
 }
 
 function toTransaction(draft: DraftTransaction, batchId: string): Transaction {
   const kind = isRefundRow(draft) ? 'refund' : classifyKind(draft);
 
+  // A partial refund has already reduced `amountMinor`, but the fingerprint must
+  // be built from the figure on the statement. Otherwise a monthly and a yearly
+  // export of the same period — only one of which carries the refund row — would
+  // hash the same purchase differently and import it twice.
+  const statedAmountMinor = draft.amountMinor + (draft.refundNettedMinor ?? 0);
+
   const fpInput = {
     occurredAt: draft.occurredAt,
-    amountMinor: draft.amountMinor,
+    amountMinor: statedAmountMinor,
     direction: draft.direction,
     counterparty: draft.counterparty,
     balanceAfterMinor: draft.balanceAfterMinor,
@@ -158,6 +241,10 @@ function toTransaction(draft: DraftTransaction, batchId: string): Transaction {
   if (draft.status) meta['status'] = draft.status;
   if (draft.orderId) meta['orderId'] = draft.orderId;
   if (draft.merchantOrderId) meta['merchantOrderId'] = draft.merchantOrderId;
+  if (draft.refundNettedMinor) {
+    meta['refundNettedMinor'] = String(draft.refundNettedMinor);
+    meta['statedAmountMinor'] = String(statedAmountMinor);
+  }
   meta['preimage'] = fingerprintPreimage(fpInput);
 
   return {
@@ -219,8 +306,12 @@ export function buildTransactions(
 
   // ---- 1. Drop rows the platform says never happened ---------------------
   const live: DraftTransaction[] = [];
+  // Remembered so stage 2 can tell a genuinely orphaned refund apart from the
+  // benign reversal of a payment that was cancelled before it settled.
+  const closedOrderIds = new Set<string>();
   for (const draft of drafts) {
     if (isClosedOrFailed(draft)) {
+      if (draft.orderId) closedOrderIds.add(draft.orderId);
       dropped.push({
         reason: 'closed-or-failed',
         detail: `Status "${draft.status ?? draft.description}" means this transaction never completed.`,
@@ -232,7 +323,7 @@ export function buildTransactions(
   }
 
   // ---- 2. Cancel refunds against their original purchase -----------------
-  const refundResult = pairRefunds(live);
+  const refundResult = pairRefunds(live, closedOrderIds);
   dropped.push(...refundResult.dropped);
   warnings.push(...refundResult.warnings);
 

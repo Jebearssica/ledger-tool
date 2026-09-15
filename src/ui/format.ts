@@ -1,4 +1,5 @@
 import type { Transaction, TransactionKind } from '../domain/types';
+import { formatMinor } from '../domain/money';
 
 export const KIND_LABELS: Record<TransactionKind, string> = {
   expense: '支出',
@@ -30,4 +31,18 @@ export function amountClass(kind: TransactionKind): string {
   if (kind === 'income') return 'num amount income';
   if (kind === 'expense') return 'num amount expense';
   return 'num';
+}
+
+/**
+ * Note for a purchase whose amount was reduced by a partial refund.
+ *
+ * Netting keeps the totals exact but hides that a refund ever happened, so the
+ * deduction is spelled out wherever the row is shown. See AGENTS.md §5.
+ */
+export function refundNettedNote(meta?: Record<string, string>): string | null {
+  const netted = Number(meta?.['refundNettedMinor'] ?? 0);
+  if (!Number.isFinite(netted) || netted <= 0) return null;
+  const stated = Number(meta?.['statedAmountMinor'] ?? 0);
+  const from = Number.isFinite(stated) && stated > 0 ? `，原 ${formatMinor(stated)}` : '';
+  return `已抵扣部分退款 ${formatMinor(netted)}${from}`;
 }

@@ -41,8 +41,28 @@ const CLOSED_TEXT_RE = /(交易关闭|订单关闭|已关闭|交易失败|支付
  */
 const REPAYMENT_RE = /(还款|偿还|结清|待还|自动扣款|全额还款|最低还款)/;
 
-/** Brokerage / wealth-management movement: real money, but not consumption. */
-const INVESTMENT_RE = /(银证转账|三方存管|证券|股票|基金|理财|期货|国债|信托|黄金|贵金属|投资|定投)/;
+/**
+ * Brokerage / wealth-management movement: real money, but not consumption.
+ *
+ * These words have no ordinary-merchant meaning, so they are trusted anywhere
+ * in the row, including the counterparty — bank statements routinely put
+ * 银证转账 only in the counterparty column.
+ */
+const INVESTMENT_RE = /(银证转账|三方存管|证券|股票|基金|理财|期货|国债|信托|投资|定投)/;
+
+/**
+ * Precious-metal words are ALSO ordinary product and merchant names, so they are
+ * believed only when the platform has already said the row is not cashflow.
+ *
+ * A real one-year statement contained exactly one row matching these words: a
+ * shampoo (交易分类 美容美发, ¥26.57) bought from a merchant the platform had
+ * masked as `黄金**半`. A loose match read that as a gold investment and quietly
+ * removed real spending from the totals — the same failure mode as the interest
+ * rows, mirrored. Trusting the platform's own 不计收支 flag instead of the word
+ * keeps genuine gold purchases (which are always 不计收支) while restoring this
+ * one.
+ */
+const INVESTMENT_BY_FLAG_RE = /(黄金|贵金属|积存金|金条|金价)/;
 
 /**
  * Fees, interest and penalties ARE genuine spending even when the platform
@@ -111,11 +131,18 @@ export function classifyKind(draft: DraftTransaction): TransactionKind {
   // 4. Brokerage / investment movement — recorded separately, never in cashflow.
   if (INVESTMENT_RE.test(text)) return 'transfer-investment';
 
+  // 4b. Words that are equally plausible as merchant or product names only get
+  //     to mean an investment when the platform already marked the row itself
+  //     as not affecting income and expense.
+  if (draft.excludedFromCashflow && INVESTMENT_BY_FLAG_RE.test(text)) {
+    return 'transfer-investment';
+  }
+
   // 5. The platform itself said this row is not income/expense. Trust it: both
   //    Alipay (`不计收支`) and WeChat (`收/支 = "/"`) mark transfers natively.
   if (draft.excludedFromCashflow) return 'transfer-internal';
 
-  // 5. Ordinary cashflow.
+  // 6. Ordinary cashflow.
   return draft.direction === 'in' ? 'income' : 'expense';
 }
 

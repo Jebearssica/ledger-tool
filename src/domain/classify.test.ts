@@ -58,6 +58,32 @@ describe('classifyKind — investments (AGENTS.md §6)', () => {
       expect(classifyKind(draft({ description, excludedFromCashflow: true }))).toBe('transfer-investment');
     }
   });
+
+  it('does not read a precious-metal word in a MERCHANT name as an investment', () => {
+    // Real one-year statement, ¥26.57: a shampoo filed under 美容美发, bought from
+    // a merchant Alipay had masked as 黄金**半. Matching 黄金 against the
+    // counterparty erased real spending from the totals. The row is a plain 支出,
+    // so the platform flag is absent and the word must not be believed.
+    expect(
+      classifyKind(
+        draft({
+          direction: 'out',
+          description: '惠润柔净洗发露护发素绿野芳香鲜花芳香600ml',
+          counterparty: '黄金**半',
+          txType: '美容美发',
+          method: '建设银行储蓄卡(9574)',
+          excludedFromCashflow: false,
+        }),
+      ),
+    ).toBe('expense');
+  });
+
+  it('still reads a genuine precious-metal movement as an investment', () => {
+    // These rows always carry the platform's own 不计收支 marker.
+    for (const description of ['购买黄金', '积存金买入', '贵金属交易']) {
+      expect(classifyKind(draft({ description, excludedFromCashflow: true }))).toBe('transfer-investment');
+    }
+  });
 });
 
 describe('classifyKind — the platform flag is trusted', () => {

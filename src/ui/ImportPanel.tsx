@@ -12,7 +12,7 @@ import {
   saveImportBatch,
   type ImportBatch,
 } from '../storage/db';
-import { amountClass, isCashflow, kindBadgeClass, kindLabel } from './format';
+import { amountClass, isCashflow, kindBadgeClass, kindLabel, refundNettedNote } from './format';
 
 type ImporterChoice = 'auto' | 'alipay' | 'wechat' | 'generic';
 
@@ -175,7 +175,7 @@ export default function ImportPanel({ onImported }: Props) {
       setNotice(
         `已导入 ${stamped.length} 条。` +
           (outcome.duplicates.length > 0 ? `跳过重复 ${outcome.duplicates.length} 条。` : '') +
-          (outcome.dropped.length > 0 ? `排除 ${outcome.dropped.length} 条（已关闭/退款/重复）。` : ''),
+          (outcome.dropped.length > 0 ? `排除 ${outcome.dropped.length} 条（已关闭/退款抵扣/重复）。` : ''),
       );
       setInspection(null);
       setOutcome(null);
@@ -485,6 +485,9 @@ export default function ImportPanel({ onImported }: Props) {
                         <td>
                           {tx.rawDescription}
                           {tx.counterparty ? <span className="muted"> · {tx.counterparty}</span> : null}
+                          {refundNettedNote(tx.meta) ? (
+                            <span className="muted"> · {refundNettedNote(tx.meta)}</span>
+                          ) : null}
                         </td>
                         <td>
                           <span className={kindBadgeClass(tx.kind)}>{kindLabel(tx.kind)}</span>
