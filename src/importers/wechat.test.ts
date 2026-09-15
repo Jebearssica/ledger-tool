@@ -1,20 +1,49 @@
 import { describe, expect, it } from 'vitest';
-import { parseDelimited, type Table } from './text';
+import { findHeaderRowIndex, parseDelimited, type Table } from './text';
 import { extractFeeMinor, parseWechat } from './wechat';
+import type { DraftTransaction } from '../domain/types';
 import {
   WECHAT_CSV,
   WECHAT_HEADER_LINE_INDEX,
+  WECHAT_REAL_HEADER_INDEX,
+  WECHAT_REAL_SHAPE_ROWS,
   WECHAT_XLSX_ROWS,
 } from '../tests/fixtures/wechat';
 
 const parseCsv = () =>
   parseWechat(parseDelimited(WECHAT_CSV, { stripTabs: true }), { accountId: 'wechat:main' });
 
-const parseXlsxShaped = () => {
-  const rows = WECHAT_XLSX_ROWS.map((row) => row.map((c) => c.trim()));
-  const table: Table = { rows, delimiter: '(xlsx)', headerRowIndex: 4, notes: [] };
-  return parseWechat(table, { accountId: 'wechat:main', format: 'xlsx' });
-};
+const asTable = (rows: readonly string[][], headerRowIndex: number): Table => ({
+  rows: rows.map((row) => row.map((c) => c.trim())),
+  delimiter: '(xlsx)',
+  headerRowIndex,
+  notes: [],
+});
+
+const parseXlsxShaped = () =>
+  parseWechat(asTable(WECHAT_XLSX_ROWS, 4), { accountId: 'wechat:main', format: 'xlsx' });
+
+/** The layout a real export actually has: long preamble plus a `金额(元)` header. */
+const parseRealShape = () =>
+  parseWechat(asTable(WECHAT_REAL_SHAPE_ROWS, WECHAT_REAL_HEADER_INDEX), {
+    accountId: 'wechat:main',
+    format: 'xlsx',
+  });
+
+/** Everything that must not differ between the two amount-column spellings. */
+const comparable = (drafts: readonly DraftTransaction[]) =>
+  drafts.map((d) => ({
+    description: d.description,
+    amountMinor: d.amountMinor,
+    direction: d.direction,
+    occurredAt: d.occurredAt,
+    txType: d.txType,
+    status: d.status,
+    orderId: d.orderId,
+    merchantOrderId: d.merchantOrderId,
+    counterparty: d.counterparty,
+    excludedFromCashflow: d.excludedFromCashflow,
+  }));
 
 describe('parseWechat — header location', () => {
   it('finds the header in the CSV', () => {
@@ -33,6 +62,42 @@ describe('parseWechat — header location', () => {
   it('names the missing columns when the layout is wrong', () => {
     const broken = ['交易时间,交易对方,商品', '2026-09-01 08:00:00,示例超市,日用'].join('\n');
     expect(() => parseWechat(parseDelimited(broken), { accountId: 'w' })).toThrow(/Missing columns: 收\/支, 金额/);
+  });
+});
+
+describe('parseWechat — real export layout', () => {
+  it('finds the header below a preamble the length of a real one', () => {
+    // Nothing may count lines: the real header is on the 18th row, and the row
+    // count has changed between platform releases.
+    expect(findHeaderRowIndex(WECHAT_REAL_SHAPE_ROWS, '交易时间')).toBe(WECHAT_REAL_HEADER_INDEX);
+  });
+
+  it('accepts the 金额(元) header that real exports use', () => {
+    // Regression: requiring the bare `金额` rejected the file outright with
+    // "Missing columns: 金额" and no rows imported at all.
+    expect(parseRealShape().drafts.length).toBeGreaterThanOrEqual(8);
+  });
+
+  it('reads the same drafts from 金额(元) as from 金额', () => {
+    // The unit suffix is part of the column title, not part of the data; it must
+    // change nothing but the key the raw row is filed under.
+    expect(comparable(parseRealShape().drafts)).toEqual(comparable(parseXlsxShaped().drafts));
+  });
+
+  it('keeps the header text as written in raw', () => {
+    const draft = parseRealShape().drafts[0]!;
+    expect(draft.raw['金额(元)']).toBeDefined();
+    expect(draft.raw['金额']).toBeUndefined();
+  });
+
+  it('does not let 金额 match an unrelated column', () => {
+    // `交易金额` is a different column, and a prefix match would silently read
+    // the wrong numbers out of it.
+    const rows = [
+      ['交易时间', '收/支', '交易金额'],
+      ['2026-09-01 09:00:00', '支出', '56.80'],
+    ];
+    expect(() => parseWechat(asTable(rows, 0), { accountId: 'w' })).toThrow(/Missing columns: 金额/);
   });
 });
 

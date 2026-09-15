@@ -88,3 +88,62 @@ export const WECHAT_EXPECTED = {
   /** The 8.88 red packet. The refund is a cancellation, not income. */
   incomeMinor: 888,
 };
+
+/**
+ * The preamble of a real export, reproduced in SHAPE only — every value here is
+ * fabricated. The blank rows are not padding: the real file skips rows 6 and 16,
+ * which is why the header lands on the 18th row and why nothing may count lines
+ * to find it (AGENTS.md §8.3 rule 1).
+ */
+const REAL_PREAMBLE: string[][] = [
+  ['微信支付账单明细'],
+  ['微信昵称：[synthetic]'],
+  ['起始时间：[2026-09-01 00:00:00] 终止时间：[2026-09-30 23:59:59]'],
+  ['导出类型：[全部账单]'],
+  ['导出时间：[2026-10-01 09:00:00]'],
+  [],
+  ['共8笔记录'],
+  ['收入：2笔 65.68元'],
+  ['支出：4笔 176.80元'],
+  ['中性交易：2笔 200.00元'],
+  ['注：'],
+  ['1. 充值/提现/理财通购买/零钱通存取/信用卡还款等交易，将计入中性交易'],
+  ['2. 若交易记录明细无有效内容，则代表该时间段内此微信号无交易'],
+  ['3. 本明细仅供个人对账使用'],
+  ['4. 本账单中所有时间均为UTC+08:00时间'],
+  [],
+  ['----------------------微信支付账单明细列表--------------------'],
+];
+
+/**
+ * The header exactly as the real XLSX export writes it: the amount column
+ * carries its unit, `金额(元)`. Requiring the bare `金额` rejected every real
+ * file with `Missing columns: 金额`.
+ */
+const REAL_HEADER = [
+  '交易时间',
+  '交易类型',
+  '交易对方',
+  '商品',
+  '收/支',
+  '金额(元)',
+  '支付方式',
+  '当前状态',
+  '交易单号',
+  '商户单号',
+  '备注',
+];
+
+/** Index of the header row in the real-shaped sheet above (the 18th row). */
+export const WECHAT_REAL_HEADER_INDEX = REAL_PREAMBLE.length;
+
+/**
+ * The real export's shape: a 17-row preamble, the `金额(元)` header, then the
+ * same synthetic data rows as `WECHAT_XLSX_ROWS` — so the two spellings can be
+ * compared directly.
+ */
+export const WECHAT_REAL_SHAPE_ROWS: string[][] = [
+  ...REAL_PREAMBLE,
+  REAL_HEADER,
+  ...WECHAT_XLSX_ROWS.slice(5),
+];

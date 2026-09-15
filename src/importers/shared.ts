@@ -38,3 +38,28 @@ export function headerMismatchError(
       `The platform may have changed its export format; refusing to parse the columns out of order.`,
   );
 }
+
+function escapeForRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&');
+}
+
+/**
+ * Find the header cell that means `name`, allowing a trailing unit annotation.
+ *
+ * WeChat labels its amount column `金额(元)` while Alipay labels the same column
+ * plain `金额`. Both spellings name the same field, so treating the unit as part
+ * of the name would reject a perfectly good export — and matching the wrong
+ * column would be worse still, so the suffix must be parenthesised and attached.
+ *
+ * @returns the header text as it appears in the file, or `null` when absent.
+ */
+export function resolveHeaderName(
+  header: readonly string[],
+  name: string,
+): string | null {
+  if (header.includes(name)) return name;
+
+  // `金额(元)` / `金额（元）` / `金额(人民币)`. Anchored, so `交易金额` never matches `金额`.
+  const withUnit = new RegExp(`^${escapeForRegExp(name)}\\s*[（(][^)）]*[)）]$`);
+  return header.find((cell) => withUnit.test(cell)) ?? null;
+}

@@ -29,17 +29,34 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
   return bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer;
 }
 
-/** Fallback for cells the library hands back as `Date` rather than a string. */
-function formatDateCell(value: Date): string {
+/**
+ * Render a date cell as the wall clock printed in the spreadsheet.
+ *
+ * This MUST read the UTC fields, not the local ones. `read-excel-file` converts
+ * an Excel date serial to `Date.UTC(<serial wall clock>)`, i.e. the instant it
+ * hands back is the stamped wall clock *reinterpreted* as UTC — the README's own
+ * example shows `1995-01-01` arriving as `1995-01-01T00:00:00.000Z`. Reading the
+ * local fields therefore adds the machine's UTC offset on top: on the UTC+8
+ * machine this project targets, a real `2026-08-30 22:27:32` row came back as
+ * `2026-08-31 06:27:32`, silently moving late-evening spending into the next day
+ * (and so into the wrong day bucket, month total and dedupe window).
+ *
+ * `toUtcIso` then interprets the string as Asia/Shanghai (AGENTS.md §4), which is
+ * correct because the export states its times are UTC+08:00.
+ */
+export function excelWallClock(value: Date): string {
   const pad = (n: number) => String(n).padStart(2, '0');
-  const hasTime = value.getHours() !== 0 || value.getMinutes() !== 0 || value.getSeconds() !== 0;
-  const date = `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`;
-  return hasTime ? `${date} ${pad(value.getHours())}:${pad(value.getMinutes())}:${pad(value.getSeconds())}` : date;
+  const hasTime =
+    value.getUTCHours() !== 0 || value.getUTCMinutes() !== 0 || value.getUTCSeconds() !== 0;
+  const date = `${value.getUTCFullYear()}-${pad(value.getUTCMonth() + 1)}-${pad(value.getUTCDate())}`;
+  return hasTime
+    ? `${date} ${pad(value.getUTCHours())}:${pad(value.getUTCMinutes())}:${pad(value.getUTCSeconds())}`
+    : date;
 }
 
 function cellToString(value: unknown): string {
   if (value === null || value === undefined) return '';
-  if (value instanceof Date) return formatDateCell(value);
+  if (value instanceof Date) return excelWallClock(value);
   if (typeof value === 'number') {
     // Guard against exponent notation for very large integers (order numbers).
     return Number.isInteger(value) && Math.abs(value) < 1e21 ? value.toFixed(0) : String(value);

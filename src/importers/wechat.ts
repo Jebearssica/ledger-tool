@@ -3,6 +3,10 @@
  *
  * Facts this implementation depends on:
  *   - WeChat exports either CSV (UTF-8) or XLSX, both with the same 11 columns.
+ *   - The amount column is titled `金额(元)` — unit included. Matching the exact
+ *     string `金额` rejected every real export, so the unit is tolerated.
+ *   - In XLSX the timestamp is a real Excel date cell, not text; the reader
+ *     converts it back to the wall clock WeChat printed (see `xlsx.ts`).
  *   - CSV fields contain stray tab characters, inserted to stop Excel from
  *     auto-converting long order numbers. They MUST be removed before parsing
  *     or every column after the first shifts by one.
@@ -13,7 +17,7 @@ import { parseAmountToMinor } from '../domain/money';
 import { toUtcIso } from '../domain/dates';
 import type { Direction, DraftTransaction, ParseResult, ParseWarning } from '../domain/types';
 import { buildColumnIndex, cellAt, findHeaderRowIndex, type Table } from './text';
-import { headerMismatchError, inferDirectionFromText } from './shared';
+import { headerMismatchError, inferDirectionFromText, resolveHeaderName } from './shared';
 
 export const WECHAT_SOURCE = 'wechat';
 
@@ -106,7 +110,22 @@ export function parseWechat(table: Table, options: WechatOptions): ParseResult {
   const header = rows[headerRowIndex] ?? [];
   const columns = buildColumnIndex(header);
 
-  const missing = REQUIRED_HEADERS.filter((name) => !columns.has(name));
+  /**
+   * Real exports title the amount column `金额(元)`; older ones use `金额`.
+   *
+   * Both spellings name the same field, so whichever one this file uses is
+   * aliased onto the canonical name. Doing it here rather than at every call
+   * site keeps the lookup below uniform — the optional columns keep their own
+   * names, and `raw` still records the header text exactly as written.
+   */
+  const missing: string[] = [];
+  for (const name of REQUIRED_HEADERS) {
+    if (columns.has(name)) continue;
+    const actual = resolveHeaderName(header, name);
+    const index = actual === null ? undefined : columns.get(actual);
+    if (index === undefined) missing.push(name);
+    else columns.set(name, index);
+  }
   if (missing.length > 0) throw headerMismatchError('WeChat', missing, header);
 
   const drafts: DraftTransaction[] = [];
