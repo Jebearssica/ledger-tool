@@ -1,5 +1,11 @@
 name: Deploy to GitHub Pages
 
+# PREREQUISITE: on the GitHub Free plan GitHub Pages is only available to PUBLIC
+# repositories, so this workflow fails on a private one. That is a GitHub plan
+# rule, not a misconfiguration here -- see "仓库要公开还是私有" in README.md.
+# Note also that a Pages site is publicly readable even when the repository is
+# private, so making the repository private buys no privacy for the deployed app.
+#
 # Publishing is not a good place to find out the tests were red, so this workflow
 # re-runs the same checks as ci.yml and will not deploy if any of them fail.
 # The duplication is intentional: it makes "green main" and "deployed" the same
