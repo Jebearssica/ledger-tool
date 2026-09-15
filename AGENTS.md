@@ -329,7 +329,7 @@ npm run check:no-plaintext   # block plaintext financial data
 
 ## 13. 仍待定 / Still open
 
-1. ~~尚未配置 GitHub Pages 部署~~ **已解决**：`.github/workflows/pages.yml` 已就绪（校验通过才发布，且不依赖 `configure-pages`，因为 `base: './'` 让它对子路径与根路径都成立）。**子路径已实测**：Service Worker 作用域、manifest、资源与懒加载 chunk 在 `/repo/` 下均正常。**仍需用户手动完成**：建远端仓库、`git push`、在 Settings → Pages 把 Source 选为「GitHub Actions」（只推 workflow 不会自动开启）。另外仓库名建议用 ASCII（如 `ledger-tool`），因为本地目录名 `记账工具` 会出现在 URL 里并被百分号编码。
+1. ~~尚未配置 GitHub Pages 部署~~ **已完成并上线**：<https://jebearssica.github.io/ledger-tool/>（仓库 `Jebearssica/ledger-tool`，公开）。`.github/workflows/pages.yml` 已就绪（校验通过才发布，且不依赖 `configure-pages`，因为 `base: './'` 让它对子路径与根路径都成立）。**线上已实测**：Service Worker 作用域为 `/ledger-tool/`、manifest 可安装、`crypto.subtle` 可用（备份正常）、GBK 文件导入与幂等性均正确。
 2. **分类规则表还不能在 UI 里编辑**。§7 要求「规则与数据分离」，目前规则仍是 `DEFAULT_RULES` 常量；IndexedDB 里已有 `rules` store，但界面未接。
 3. **多份快照的命名与保留策略未定**。当前由用户自行命名并放置，仓库里还没有 `data/` 约定。
 4. **2 分钟时间桶的合并阈值未按真实数据校准**（见 §5）。若实际出现误合并，需要调整 `TIME_WINDOW_MINUTES`，而**那会改变指纹**，必须同时递增 `FINGERPRINT_VERSION` 并写迁移。

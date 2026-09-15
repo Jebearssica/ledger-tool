@@ -6,6 +6,13 @@ A local-first personal expense tracker: import Alipay / WeChat Pay / bank statem
 **没有后端。明文流水永远不离开你的设备。**
 **No backend. Plaintext statements never leave your device.**
 
+> ## 🚀 直接使用 / Live
+>
+> **<https://jebearssica.github.io/ledger-tool/>**
+>
+> 手机 Chrome 打开 → 菜单 → 「添加到主屏幕」，即可像 App 一样离线使用。
+> Open in mobile Chrome → menu → "Add to Home screen" for an offline, app-like install.
+
 ---
 
 ## 它解决什么问题 / What it solves
@@ -112,11 +119,9 @@ git push -u origin main
 
 #### 3. 拿到地址
 
-形如 `https://<你的用户名>.github.io/ledger-tool/`。
+本项目已部署：**<https://jebearssica.github.io/ledger-tool/>**
 
-路径是子目录，这是最容易出错的地方 —— 本项目的 `base: './'`（相对路径）已经过实测：Service Worker 作用域、manifest、静态资源、以及懒加载的 PDF/XLSX chunk 在该子路径下全部正常解析。
-
-若仓库取名 `<你的用户名>.github.io`，则发布在根路径 `https://<你的用户名>.github.io/`，同样可用。
+路径是子目录，这是最容易出错的地方 —— 本项目的 `base: './'`（相对路径）已经在真实线上环境验证过：Service Worker 作用域、manifest、静态资源、以及懒加载的 PDF/XLSX chunk 在该子路径下全部正常解析。
 
 #### 4. 手机安装
 
