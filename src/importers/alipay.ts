@@ -90,11 +90,23 @@ export function parseAlipay(table: Table, options: AlipayOptions): ParseResult {
     }
 
     let amountMinor = parseAmountToMinor(record('金额'));
-    if (amountMinor === null || amountMinor === 0) {
+    if (amountMinor === null) {
       warnings.push({
         code: 'unparsable-amount',
         row: i + 1,
         message: `Could not read an amount from "${record('金额')}"; row skipped.`,
+      });
+      continue;
+    }
+    if (amountMinor === 0) {
+      // Distinct from unreadable: these are real rows (Alipay files medical
+      // reimbursements as `医保支付(不含自费)` with 金额 = 0.00). They carry no
+      // money, so they are skipped, but the user deserves to know they existed
+      // rather than seeing them reported as a parsing failure.
+      warnings.push({
+        code: 'zero-amount',
+        row: i + 1,
+        message: `Amount is 0.00 ("${record('商品说明')}"); nothing to record, row skipped.`,
       });
       continue;
     }

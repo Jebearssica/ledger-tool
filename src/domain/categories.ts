@@ -43,6 +43,7 @@ export const DEFAULT_CATEGORIES: readonly CategoryDef[] = [
   { id: 'clothing', label: '服饰', appliesTo: 'expense' },
   { id: 'travel', label: '旅行', appliesTo: 'expense' },
   { id: 'digital', label: '数码', appliesTo: 'expense' },
+  { id: 'express', label: '快递物流', appliesTo: 'expense' },
   { id: 'pet', label: '宠物', appliesTo: 'expense' },
   { id: 'fees', label: '手续费利息', appliesTo: 'expense' },
   { id: 'other', label: '其他', appliesTo: 'expense' },
@@ -87,6 +88,11 @@ export const DEFAULT_RULES: readonly CategoryRule[] = [
   expenseRule('r-transport-8', 'transport', '停车'),
   expenseRule('r-transport-9', 'transport', '出租车'),
   expenseRule('r-transport-10', 'transport', '打车'),
+  expenseRule('r-transport-11', 'transport', '单车'),
+  expenseRule('r-transport-12', 'transport', '骑行'),
+  expenseRule('r-transport-13', 'transport', '地铁'),
+  expenseRule('r-transport-14', 'transport', '航空'),
+  expenseRule('r-transport-15', 'transport', '航班'),
 
   expenseRule('r-groceries-1', 'groceries', '超市'),
   expenseRule('r-groceries-2', 'groceries', '便利店'),
@@ -134,6 +140,9 @@ export const DEFAULT_RULES: readonly CategoryRule[] = [
   expenseRule('r-medical-3', 'medical', '药店'),
   expenseRule('r-medical-4', 'medical', '诊所'),
   expenseRule('r-medical-5', 'medical', '体检'),
+  expenseRule('r-medical-6', 'medical', '胶囊'),
+  expenseRule('r-medical-7', 'medical', '医保'),
+  expenseRule('r-medical-8', 'medical', '门诊'),
 
   expenseRule('r-education-1', 'education', '学费'),
   expenseRule('r-education-2', 'education', '培训'),
@@ -156,6 +165,11 @@ export const DEFAULT_RULES: readonly CategoryRule[] = [
   expenseRule('r-digital-1', 'digital', '苹果'),
   expenseRule('r-digital-2', 'digital', '华为'),
   expenseRule('r-digital-3', 'digital', '小米'),
+
+  expenseRule('r-express-1', 'express', '快递'),
+  expenseRule('r-express-2', 'express', '寄件'),
+  expenseRule('r-express-3', 'express', '物流'),
+  expenseRule('r-express-4', 'express', '菜鸟'),
 
   expenseRule('r-pet-1', 'pet', '宠物'),
   expenseRule('r-pet-2', 'pet', '猫'),

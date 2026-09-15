@@ -76,19 +76,62 @@ describe('classifyKind — the platform flag is trusted', () => {
   });
 });
 
-describe('isClosedOrFailed', () => {
-  it('flags rows that never completed', () => {
-    expect(isClosedOrFailed(draft({ status: '交易关闭' }))).toBe(true);
-    expect(isClosedOrFailed(draft({ status: '交易失败' }))).toBe(true);
-    expect(isClosedOrFailed(draft({ status: '已取消' }))).toBe(true);
-    expect(isClosedOrFailed(draft({ status: '已撤销' }))).toBe(true);
+describe('classifyKind — interest credited as income', () => {
+  it('counts daily wallet interest as income, not an investment transfer', () => {
+    // Alipay files these under 交易分类 = 投资理财 and marks them 不计收支, so both
+    // the investment rule and the "not cashflow" flag would discard them. They
+    // are money actually gained, and a real year held 365 of them.
+    expect(
+      classifyKind(
+        draft({
+          direction: 'in',
+          description: '余额宝-2026.09.13-收益发放',
+          counterparty: '天弘基金管理有限公司',
+          txType: '投资理财',
+          excludedFromCashflow: true,
+        }),
+      ),
+    ).toBe('income');
   });
 
-  it('does not flag successful rows', () => {
-    expect(isClosedOrFailed(draft({ status: '交易成功' }))).toBe(false);
-    expect(isClosedOrFailed(draft({ status: '支付成功' }))).toBe(false);
-    expect(isClosedOrFailed(draft({ status: '已存入零钱' }))).toBe(false);
-    expect(isClosedOrFailed(draft({ status: '提现已到账' }))).toBe(false);
+  it('still treats an investment purchase as a transfer', () => {
+    expect(
+      classifyKind(
+        draft({
+          description: '蚂蚁财富-华泰柏瑞纳斯达克100ETF联接(QDII)A-买入',
+          txType: '投资理财',
+          excludedFromCashflow: true,
+        }),
+      ),
+    ).toBe('transfer-investment');
+  });
+
+  it('does not read an outgoing interest/fee charge as income', () => {
+    expect(
+      classifyKind(
+        draft({ direction: 'out', description: '利息', excludedFromCashflow: true }),
+      ),
+    ).toBe('expense');
+  });
+});
+
+describe('isClosedOrFailed — real-world status wordings', () => {
+  it('catches 还款失败, which a narrower list missed', () => {
+    // Observed in a real statement. Missing it recorded a repayment that the
+    // platform had explicitly marked as failed.
+    expect(isClosedOrFailed(draft({ status: '还款失败' }))).toBe(true);
+  });
+
+  it('catches the other terminal states', () => {
+    for (const status of ['交易关闭', '交易失败', '支付失败', '已取消', '已撤销', '交易超时', '已失效']) {
+      expect(isClosedOrFailed(draft({ status }))).toBe(true);
+    }
+  });
+
+  it('does not treat a successful or pending status as terminal', () => {
+    for (const status of ['交易成功', '支付成功', '还款成功', '退款成功', '等待确认收货', '已存入零钱']) {
+      expect(isClosedOrFailed(draft({ status }))).toBe(false);
+    }
   });
 });
 

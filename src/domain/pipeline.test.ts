@@ -3,6 +3,7 @@ import { parseDelimited } from '../importers/text';
 import { parseAlipay } from '../importers/alipay';
 import { buildTransactions } from '../domain/pipeline';
 import { DEFAULT_RULES } from '../domain/categories';
+import { FINGERPRINT_VERSION } from '../domain/fingerprint';
 import type { Transaction } from '../domain/types';
 import { ALIPAY_CSV, ALIPAY_EXPECTED } from '../tests/fixtures/alipay';
 
@@ -142,7 +143,7 @@ describe('buildTransactions — idempotency (AGENTS.md §5)', () => {
   it('records the batch and fingerprint version on every row', () => {
     for (const t of run().transactions) {
       expect(t.importedBatchId).toBe('batch-1');
-      expect(t.fingerprintVersion).toBe(1);
+      expect(t.fingerprintVersion).toBe(FINGERPRINT_VERSION);
     }
   });
 });

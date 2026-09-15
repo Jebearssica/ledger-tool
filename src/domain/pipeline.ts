@@ -146,6 +146,8 @@ function toTransaction(draft: DraftTransaction, batchId: string): Transaction {
     direction: draft.direction,
     counterparty: draft.counterparty,
     balanceAfterMinor: draft.balanceAfterMinor,
+    orderId: draft.orderId,
+    description: draft.description,
   };
 
   const fp = fingerprint(fpInput);

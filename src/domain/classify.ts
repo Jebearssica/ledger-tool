@@ -18,8 +18,19 @@ function haystack(draft: DraftTransaction): string {
 /**
  * Rows the platform reported as never having happened. Recording these invents
  * spending out of thin air.
+ *
+ * The status field is matched loosely: real exports use more wordings than any
+ * fixed list can enumerate. Observed in the wild include 还款失败 (a failed
+ * credit-line repayment, which a narrower list missed and so recorded as a real
+ * repayment) alongside 交易关闭 / 交易失败 / 已取消 / 已撤销.
  */
-const CLOSED_STATUS_RE = /(交易关闭|订单关闭|已关闭|交易失败|支付失败|已取消|已撤销|撤单|已失效|交易超时)/;
+const CLOSED_STATUS_RE = /(关闭|失败|取消|撤销|撤单|失效|超时)/;
+
+/**
+ * The same condition, but tested against free text, where a loose match would
+ * produce false positives (a merchant name could legitimately contain 失败).
+ */
+const CLOSED_TEXT_RE = /(交易关闭|订单关闭|已关闭|交易失败|支付失败|还款失败|已取消|已撤销|撤单|已失效|交易超时)/;
 
 /**
  * Repayments clear a liability; they are not new spending.
@@ -39,11 +50,29 @@ const INVESTMENT_RE = /(银证转账|三方存管|证券|股票|基金|理财|�
  */
 const FEE_RE = /(手续费|服务费|分期手续费|利息|逾期费|违约金|年费|管理费|利费)/;
 
+/**
+ * Interest EARED is income, not a transfer, and this is easy to get wrong.
+ *
+ * A wallet paying daily interest produces rows like
+ * `余额宝-2026.09.13-收益发放` which the platform marks 不计收支, because from its
+ * point of view nothing left the wallet. Economically the balance grew, so it is
+ * income — and treating it as an investment movement hides hundreds of rows of
+ * real income. A real one-year statement contained 365 such rows.
+ *
+ * Matched against the DESCRIPTION only. The 交易分类 column of these very rows
+ * reads 投资理财, so testing the whole haystack would match 投资 and send them back
+ * down the investment path.
+ */
+const INTEREST_INCOME_RE = /(收益发放|结息|利息收入|派息|分红|分红发放)/;
+
+/** Interest wording that must NOT be read as income when money is leaving. */
+const FEE_CONTEXT_RE = /(手续费|服务费|逾期费|违约金|管理费|利费)/;
+
 export function isClosedOrFailed(draft: DraftTransaction): boolean {
   const status = draft.status ?? '';
-  if (CLOSED_STATUS_RE.test(status)) return true;
+  if (status !== '' && CLOSED_STATUS_RE.test(status)) return true;
   // Some exporters only surface the state inside the description.
-  return CLOSED_STATUS_RE.test(draft.description);
+  return CLOSED_TEXT_RE.test(draft.description);
 }
 
 /**
@@ -64,13 +93,25 @@ export function classifyKind(draft: DraftTransaction): TransactionKind {
   //    movement, so they must be claimed before the transfer rules below.
   if (draft.direction === 'out' && FEE_RE.test(text)) return 'expense';
 
-  // 2. Repayment of a credit line (Huabei / credit card / Jiebei / Baitiao).
+  // 2. Interest credited to the user's own balance is genuine income. This must
+  //    be tested before the investment rule, because these rows are filed under
+  //    交易分类 = 投资理财 and would otherwise be discarded as transfers.
+  const description = draft.description ?? '';
+  if (
+    draft.direction === 'in' &&
+    INTEREST_INCOME_RE.test(description) &&
+    !FEE_CONTEXT_RE.test(description)
+  ) {
+    return 'income';
+  }
+
+  // 3. Repayment of a credit line (Huabei / credit card / Jiebei / Baitiao).
   if (REPAYMENT_RE.test(text)) return 'transfer-repayment';
 
-  // 3. Brokerage / investment movement — recorded separately, never in cashflow.
+  // 4. Brokerage / investment movement — recorded separately, never in cashflow.
   if (INVESTMENT_RE.test(text)) return 'transfer-investment';
 
-  // 4. The platform itself said this row is not income/expense. Trust it: both
+  // 5. The platform itself said this row is not income/expense. Trust it: both
   //    Alipay (`不计收支`) and WeChat (`收/支 = "/"`) mark transfers natively.
   if (draft.excludedFromCashflow) return 'transfer-internal';
 

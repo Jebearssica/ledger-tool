@@ -72,11 +72,38 @@ export function parseDelimited(
       );
     }
     source = source.split('\t').join('');
-    notes.push('Removed tab characters before parsing (WeChat export quirk).');
+    notes.push('Removed tab characters before parsing (export quirk).');
+  }
+
+  /**
+   * Normalise line endings to a single LF, and only then parse.
+   *
+   * This is not cosmetic — Papa Parse detects the line break from the FIRST one
+   * it encounters and then applies it to the entire input. Real Alipay exports
+   * write the preamble with CRLF and every data row with a bare LF, so detection
+   * latches onto CRLF and the whole body is swallowed into ONE row, producing a
+   * handful of "rows" whose first entry is the header plus every transaction.
+   * That failure is silent: parsing "succeeds" and yields zero usable records.
+   *
+   * Normalising first also covers CRLF-only and legacy bare-CR files.
+   */
+  const crlfCount = (source.match(/\r\n/g) ?? []).length;
+  const lfCount = (source.match(/\n/g) ?? []).length;
+  const hasBareCr = /\r(?!\n)/.test(source);
+
+  if (crlfCount > 0 || hasBareCr) {
+    const bareLf = lfCount - crlfCount;
+    if (crlfCount > 0 && bareLf > 0) {
+      notes.push('Mixed line endings (CRLF and LF) detected; normalised to LF before parsing.');
+    }
+    source = source.replace(/\r\n?/g, '\n');
   }
 
   const parsed = Papa.parse<string[]>(source, {
     delimiter: guessedDelimiter,
+    // Explicit, because the input is already normalised and autodetection is
+    // exactly what went wrong above.
+    newline: '\n',
     skipEmptyLines: 'greedy',
   });
 
