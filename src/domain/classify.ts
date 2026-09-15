@@ -6,6 +6,7 @@
  * plan's "repeat recording" concern describes.
  */
 import type { DraftTransaction, TransactionKind } from './types';
+import { parseAmountToMinor } from './money';
 
 /** Combine every human-readable field into one haystack for keyword tests. */
 function haystack(draft: DraftTransaction): string {
@@ -96,11 +97,61 @@ export function isClosedOrFailed(draft: DraftTransaction): boolean {
 }
 
 /**
- * A refund row. Alipay emits `交易状态 = 退款成功` with `交易分类 = 退款`.
- * Unpaired refunds are kept as `refund` (excluded from cashflow) rather than
- * dropped, so an unmatched refund never silently disappears.
+ * A partial-refund figure that the row's own status discloses, in minor units.
+ *
+ * WeChat does not emit a separate refund row against a linkable order id the way
+ * Alipay does. Instead it rewrites the ORIGINAL PURCHASE row's 当前状态 to say how
+ * much came back — `已退款(¥9.00)` — and gives the refund leg a 交易单号 that has
+ * no relationship to the purchase's. Measured on a real yearly export: all 12
+ * refund rows failed all five id-based linkage rules that were tried, so the
+ * figure carried by the purchase's own status is the only signal that exists.
+ *
+ * `已全额退款` deliberately names no figure. There the whole purchase is gone and
+ * the row must be removed rather than netted, and returning `null` keeps it on
+ * that path. Alipay never writes a figure into 交易状态 either, so this is inert
+ * for Alipay and the order-id pairing stays in charge.
+ *
+ * The equality guard is what makes "partial" mean partial: a figure equal to the
+ * row reverses the row entirely, and a larger one contradicts the statement —
+ * turning either into a deduction would invent spending that never happened.
+ *
+ * @returns minor units, only when strictly smaller than the row it appears on.
+ */
+export function disclosedPartialRefundMinor(draft: DraftTransaction): number | null {
+  const status = draft.status ?? '';
+  if (!status.includes('退')) return null;
+
+  /**
+   * Both real spellings carry the currency marker (`已退款(¥9.00)`, `已退款¥9.00`).
+   * A parenthesised figure is also accepted, but only when it looks like money —
+   * a decimal point — so that unrelated parentheses such as `退款(3天到账)` can
+   * never be read as a ¥0.03 deduction.
+   */
+  const figure = /(?:[¥￥]\s*(\d+(?:\.\d{1,2})?)|[(（]\s*(\d+\.\d{1,2})\s*[)）])/.exec(status);
+  const text = figure?.[1] ?? figure?.[2];
+  if (!text) return null;
+
+  const disclosed = parseAmountToMinor(text);
+  if (disclosed === null || disclosed <= 0) return null;
+
+  return disclosed < draft.amountMinor ? disclosed : null;
+}
+
+/**
+ * A refund row — a record that money came back, rather than a purchase.
+ *
+ * Alipay emits `交易状态 = 退款成功` with `交易分类 = 退款`. Unpaired refunds are
+ * kept as `refund` (excluded from cashflow) rather than dropped, so an unmatched
+ * refund never silently disappears.
+ *
+ * A purchase that discloses a PARTIAL refund of itself is explicitly not one of
+ * these. Its status also reads `已退款…`, and matching those words here discarded
+ * the entire purchase: a real ¥154.00 order left the ¥145.00 that genuinely left
+ * the account out of every total.
  */
 export function isRefundRow(draft: DraftTransaction): boolean {
+  if (disclosedPartialRefundMinor(draft) !== null) return false;
+
   const status = draft.status ?? '';
   if (/(退款成功|已全额退款|已退款|退款完成)/.test(status)) return true;
   return draft.txType === '退款';

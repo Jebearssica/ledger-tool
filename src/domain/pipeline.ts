@@ -20,7 +20,7 @@ import type {
   Transaction,
 } from './types';
 import { categorize, type CategoryRule } from './categories';
-import { classifyKind, isClosedOrFailed, isRefundRow } from './classify';
+import { classifyKind, disclosedPartialRefundMinor, isClosedOrFailed, isRefundRow } from './classify';
 import { formatMinor } from './money';
 import { fingerprintPreimage, fingerprint, transactionIdFromFingerprint, FINGERPRINT_VERSION } from './fingerprint';
 import { pairInternalTransfers, type PairingOptions, type TransferPair } from './transfers';
@@ -97,6 +97,12 @@ function preview(draft: DraftTransaction): DroppedRow['preview'] {
  * A refund whose purchase the platform marked 交易关闭 is NOT an anomaly: the
  * "refund" is the reversal of a payment that never happened. Ten of those occur
  * in one year of real data, and warning about them is pure noise.
+ *
+ * Not every platform pairs by order id. WeChat instead rewrites the purchase
+ * row's own status to carry the refunded figure and gives the refund leg an
+ * unrelated order id, so no rewriting of the rule above can connect the two.
+ * That second, self-disclosed shape is netted at the end of this function — see
+ * `disclosedPartialRefundMinor`.
  */
 function pairRefunds(
   drafts: readonly DraftTransaction[],
@@ -205,7 +211,19 @@ function pairRefunds(
   const kept = drafts
     .map((draft, index) => {
       if (removed.has(index)) return null;
-      const deducted = nettedOf(index);
+
+      // A refund the row itself discloses. WeChat never links a refund to its
+      // purchase by id, so the pairing loop above cannot find the pair however it
+      // is written; the figure in the purchase's own 当前状态 is the only signal.
+      // Leaving it out discarded the whole purchase, so the ¥145 that genuinely
+      // left the account appeared in no total at all.
+      //
+      // Skipped when pairing already took its cut, or the same money would be
+      // deducted twice and spending would be understated instead.
+      const paired = nettedOf(index);
+      const disclosed = paired === 0 ? (disclosedPartialRefundMinor(draft) ?? 0) : 0;
+      const deducted = paired + disclosed;
+
       if (deducted === 0) return draft;
       return { ...draft, amountMinor: draft.amountMinor - deducted, refundNettedMinor: deducted };
     })

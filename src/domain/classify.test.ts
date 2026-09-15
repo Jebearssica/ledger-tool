@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import type { DraftTransaction } from '../domain/types';
-import { classifyKind, isClosedOrFailed, isRefundRow, looksLikeTransfer } from '../domain/classify';
+import {
+  classifyKind,
+  disclosedPartialRefundMinor,
+  isClosedOrFailed,
+  isRefundRow,
+  looksLikeTransfer,
+} from '../domain/classify';
 
 function draft(overrides: Partial<DraftTransaction> = {}): DraftTransaction {
   return {
@@ -170,6 +176,64 @@ describe('isRefundRow', () => {
 
   it('does not treat ordinary purchases as refunds', () => {
     expect(isRefundRow(draft({ status: '交易成功', txType: '购物' }))).toBe(false);
+  });
+});
+
+/**
+ * WeChat discloses a refund on the purchase's own status rather than against a
+ * linked order id, so the row has to be read carefully: `已退款…` on a purchase
+ * means part of it came back, not that the row is a refund.
+ */
+describe('disclosedPartialRefundMinor — a refund the row discloses itself', () => {
+  it('reads the figure from both spellings a real export uses', () => {
+    // Real rows: the purchase read `已退款(¥9.00)`, its refund leg `已退款¥9.00`.
+    expect(disclosedPartialRefundMinor(draft({ amountMinor: 15_400, status: '已退款(¥9.00)' }))).toBe(900);
+    expect(disclosedPartialRefundMinor(draft({ amountMinor: 15_400, status: '已退款¥9.00' }))).toBe(900);
+    expect(disclosedPartialRefundMinor(draft({ amountMinor: 15_400, status: '已退款(9.00)' }))).toBe(900);
+  });
+
+  it('names no figure when the whole purchase was reversed', () => {
+    // `已全额退款` must stay on the refund path: netting it would keep a row that
+    // is entirely cancelled, and there is no figure to net anyway.
+    expect(disclosedPartialRefundMinor(draft({ amountMinor: 15_400, status: '已全额退款' }))).toBeNull();
+    expect(disclosedPartialRefundMinor(draft({ amountMinor: 15_400, status: '退款成功' }))).toBeNull();
+    expect(disclosedPartialRefundMinor(draft({ amountMinor: 15_400, status: '交易成功' }))).toBeNull();
+    expect(disclosedPartialRefundMinor(draft({ amountMinor: 15_400 }))).toBeNull();
+  });
+
+  it('refuses a figure that is not smaller than the row', () => {
+    // Equal means fully reversed, larger contradicts the statement. Either one
+    // would invent spending that never happened.
+    expect(disclosedPartialRefundMinor(draft({ amountMinor: 900, status: '已退款¥9.00' }))).toBeNull();
+    expect(disclosedPartialRefundMinor(draft({ amountMinor: 500, status: '已退款¥9.00' }))).toBeNull();
+  });
+
+  it('is not fooled by parentheses that hold something other than money', () => {
+    expect(disclosedPartialRefundMinor(draft({ amountMinor: 15_400, status: '退款(3天到账)' }))).toBeNull();
+  });
+
+  it('does not read a discount as a refund', () => {
+    // 已优惠¥3.60 sits in 商品, but the guard must hold even if it ever reached 状态.
+    expect(disclosedPartialRefundMinor(draft({ amountMinor: 15_400, status: '已优惠¥3.60' }))).toBeNull();
+  });
+
+  it('leaves a partially refunded purchase classified as a purchase', () => {
+    const purchase = draft({
+      direction: 'out',
+      amountMinor: 15_400,
+      status: '已退款(¥9.00)',
+      txType: '商户消费',
+      description: '示例商品',
+    });
+    // The trap: `已退款` alone made this a refund row, which discarded the row
+    // and with it the ¥145.00 that really left the account.
+    expect(isRefundRow(purchase)).toBe(false);
+    expect(classifyKind(purchase)).toBe('expense');
+  });
+
+  it('still calls the refund leg and a fully reversed purchase refunds', () => {
+    expect(isRefundRow(draft({ direction: 'in', amountMinor: 900, status: '已退款¥9.00' }))).toBe(true);
+    expect(isRefundRow(draft({ amountMinor: 15_400, status: '已全额退款' }))).toBe(true);
   });
 });
 

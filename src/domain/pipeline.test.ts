@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { parseDelimited } from '../importers/text';
 import { parseAlipay } from '../importers/alipay';
+import { parseWechat } from '../importers/wechat';
 import { buildTransactions } from '../domain/pipeline';
 import { DEFAULT_RULES } from '../domain/categories';
 import { FINGERPRINT_VERSION } from '../domain/fingerprint';
@@ -224,6 +225,104 @@ describe('buildTransactions — refunds (AGENTS.md §5)', () => {
     const sameInBoth = plain.transactions.find((t) => t.rawDescription === '示例生鲜订单')!;
     expect(sameInBoth.amountMinor).toBe(4319);
     expect(sameInBoth.fingerprint).toBe(purchase.fingerprint);
+  });
+
+  /**
+   * WeChat's shape, which the order-id rule above cannot reach at all.
+   *
+   * There is no refund row carrying a linkable order id: the purchase row's own
+   * 当前状态 is rewritten to `已退款(¥9.00)` and the refund leg is given a 交易单号
+   * with no relationship to the purchase's. Verified on a real yearly export,
+   * where all 12 refund rows failed all five id-based linkage rules that were
+   * tried, so the figure on the purchase's own row is the only signal there is.
+   *
+   * Reading `已退款` on the purchase as "this row is a refund" discarded the whole
+   * ¥154.00 order, and the ¥145.00 that genuinely left the account then appeared
+   * in no total at all. Full refunds came out right only by accident: both of
+   * their rows are cancelled, so discarding them happens to be correct.
+   */
+  describe('a refund the purchase discloses on its own row (WeChat)', () => {
+    const WECHAT_HEADERS = [
+      '交易时间', '交易类型', '交易对方', '商品', '收/支', '金额(元)',
+      '支付方式', '当前状态', '交易单号', '商户单号', '备注',
+    ];
+
+    /**
+     * Order ids deliberately unrelated, exactly as the real export writes them —
+     * and 28 digits long, the length WeChat really uses, which also keeps them
+     * well clear of the 16–19 digit bank-card shape the privacy gate rejects.
+     */
+    const WECHAT_REFUND_ROWS = [
+      WECHAT_HEADERS,
+      // ¥154.00 paid, ¥9.00 returned: ¥145.00 really left the account.
+      ['2026-05-18 16:26', '商户消费', '示例商户', '示例商品', '支出', '154.00', '零钱', '已退款(¥9.00)', '4200003120202605181626000001', ''],
+      ['2026-05-24 13:33', '示例商户-退款', '示例商户', '/', '收入', '9.00', '零钱', '已退款¥9.00', '5030280718202605241333000001', ''],
+      // Fully reversed, so neither of its rows may count.
+      ['2026-06-25 12:45', '商户消费', '示例商户二', '示例商品二', '支出', '25.90', '零钱', '已全额退款', '4500000174202606251245000001', ''],
+      ['2026-06-25 12:48', '示例商户二-退款', '示例商户二', '/', '收入', '25.90', '零钱', '已全额退款', '5010360751202606251248000001', ''],
+    ];
+
+    function runWechatRefundFixture(existingFingerprints?: ReadonlySet<string>) {
+      const table = {
+        rows: WECHAT_REFUND_ROWS.map((row) => row.map((c) => c.trim())),
+        delimiter: '(xlsx)',
+        headerRowIndex: 0,
+        notes: [],
+      };
+      const drafts = parseWechat(table, { accountId: 'wechat:main', format: 'xlsx' }).drafts;
+
+      return buildTransactions(drafts, {
+        batchId: 'wechat-refund-batch',
+        rules: DEFAULT_RULES,
+        ...(existingFingerprints ? { existingFingerprints } : {}),
+      });
+    }
+
+    it('keeps the part of the purchase that was not refunded', () => {
+      const purchase = runWechatRefundFixture().transactions.find(
+        (t) => t.rawDescription === '示例商品',
+      )!;
+
+      // 154.00 - 9.00 — not 154.00, and, as the bug had it, not nothing at all.
+      expect(purchase.kind).toBe('expense');
+      expect(purchase.amountMinor).toBe(14_500);
+      expect(purchase.rawDescription).toBe('示例商品');
+      expect(purchase.meta?.['refundNettedMinor']).toBe('900');
+      expect(purchase.meta?.['statedAmountMinor']).toBe('15400');
+    });
+
+    it('cancels a fully reversed purchase without letting it count again', () => {
+      const result = runWechatRefundFixture();
+      const reversed = result.transactions.filter((t) => t.rawDescription === '示例商品二');
+
+      // Both rows of the pair survive the way an unpaired refund always does —
+      // kept so the money is visible, but as refunds, so neither one lands in
+      // income or expense. Dropping them instead would hide the reversal.
+      expect(reversed).toHaveLength(1);
+      expect(reversed[0]!.kind).toBe('refund');
+      expect(totalOf(result.transactions, 'expense')).toBe(14_500);
+    });
+
+    it('does not count the refund legs as income', () => {
+      const result = runWechatRefundFixture();
+
+      expect(totalOf(result.transactions, 'income')).toBe(0);
+      // Two legs, plus the fully reversed purchase row kept as a refund.
+      expect(result.transactions.filter((t) => t.kind === 'refund')).toHaveLength(3);
+    });
+
+    it('re-imports to the same figures, because the stated amount is hashed', () => {
+      const first = runWechatRefundFixture();
+      const second = runWechatRefundFixture(
+        new Set(first.transactions.map((t) => t.fingerprint)),
+      );
+
+      // The fingerprint must be built from the ¥154.00 printed on the statement,
+      // not the netted ¥145.00, or a monthly and a yearly export of the same
+      // period would import the same purchase twice.
+      expect(second.transactions).toHaveLength(0);
+      expect(second.duplicates).toHaveLength(first.transactions.length);
+    });
   });
 });
 
