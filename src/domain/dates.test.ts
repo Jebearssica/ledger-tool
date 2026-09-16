@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   bucketEpochSeconds,
+  combineDateAndTime,
   formatShanghai,
   parseWallClock,
   shanghaiDayStart,
@@ -31,9 +32,28 @@ describe('parseWallClock', () => {
   });
 });
 
+describe('combineDateAndTime', () => {
+  it('joins a separate date and time column', () => {
+    // Bank statements split these; reading only the date floors every row in the
+    // file to midnight, which quietly widens the dedupe and transfer windows.
+    expect(toUtcIso(combineDateAndTime('2026-09-10', '22:20:56'))).toBe('2026-09-10T14:20:56.000Z');
+    expect(toUtcIso(combineDateAndTime('2026-09-10', '22:20'))).toBe('2026-09-10T14:20:00.000Z');
+  });
+
+  it('leaves a date alone when there is no time column', () => {
+    expect(combineDateAndTime('2026-09-10', '')).toBe('2026-09-10');
+    expect(combineDateAndTime('2026-09-10', undefined)).toBe('2026-09-10');
+  });
+
+  it('prefers a timestamp already inside the date column', () => {
+    // Appending would produce `2026-09-10 10:00:00 22:20:56`, whose extra numbers
+    // are dropped by the parser — silently keeping the wrong time.
+    expect(combineDateAndTime('2026-09-10 10:00:00', '22:20:56')).toBe('2026-09-10 10:00:00');
+  });
+});
+
 describe('toUtcIso', () => {
-  it('converts Shanghai wall-clock time to UTC', () => {
-    // 10:30 in Shanghai (UTC+8) is 02:30 UTC.
+  it('converts Shanghai wall-clock time to UTC', () => {    // 10:30 in Shanghai (UTC+8) is 02:30 UTC.
     expect(toUtcIso('2026-09-14 10:30:00')).toBe('2026-09-14T02:30:00.000Z');
     expect(toUtcIso('2026-09-14 00:30:00')).toBe('2026-09-13T16:30:00.000Z');
   });

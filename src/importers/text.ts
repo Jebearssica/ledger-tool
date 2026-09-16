@@ -16,15 +16,29 @@ export interface Table {
   notes: string[];
 }
 
-/** Header cells that appear in real Chinese bank and platform exports. */
-const HEADER_KEYWORDS = [
+/**
+ * Header cells that appear in real Chinese bank and platform exports.
+ *
+ * Exported because the PDF path has to recognise a header LINE (a row of glyph
+ * runs) before it can derive columns from it — see `pdf.ts`. Sharing one
+ * vocabulary keeps CSV, HTML and PDF header detection consistent.
+ *
+ * Adding a word here is safe as long as it names a column and would not appear
+ * inside a transaction's own text: a hit is worth 10 points, so a data row that
+ * happens to contain one cannot outrank a genuine header.
+ */
+export const HEADER_KEYWORDS = [
   '交易时间',
   '交易日期',
   '记账日期',
+  '记账时间',
   '交易日',
   '交易金额',
   '发生额',
   '本币金额',
+  '金额',
+  '币别',
+  '币种',
   '收/支',
   '收支',
   '交易类型',
@@ -33,10 +47,16 @@ const HEADER_KEYWORDS = [
   '交易对方',
   '对方户名',
   '对方账号',
+  '对方卡号',
+  '对方账户名',
+  '对方开户行',
+  '交易名称',
   '商户',
   '商品',
   '摘要',
   '备注',
+  '附言',
+  '渠道',
   '余额',
   '借/贷',
   '借方',

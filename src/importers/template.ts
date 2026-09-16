@@ -17,6 +17,11 @@ import type { Direction } from '../domain/types';
 export interface ColumnMapping {
   /** Column holding the transaction date. Required. */
   date: string;
+  /**
+   * Column holding a separate time of day, when the file splits it from the date
+   * (`记账日期` + `记账时间`). Without it every row would land on midnight.
+   */
+  time?: string;
   /** Single amount column. Sign or the `direction` column decides in/out. */
   amount?: string;
   /** Separate credit column (money in). Most Chinese bank statements use this. */
@@ -62,12 +67,49 @@ export const DEFAULT_DIRECTION_VALUES = {
 };
 
 /**
- * Starter templates. These are STARTING POINTS, not verified layouts: no real
- * bank file was available when they were written. The user is expected to open
- * the mapping UI, check the column names against their own export, and save a
- * corrected version. Treat them as a worked example of the mapping shape.
+ * Verified layout: Bank of China debit-card statement PDF, exported 2026-09.
+ *
+ * The columns were read off a real 11-page export whose own per-page
+ * `借方发生数` / `贷方发生数` totals reconcile exactly against the parsed amounts,
+ * so the mapping is confirmed rather than guessed. Two details are specific to
+ * this format and worth knowing:
+ *
+ *   - `金额` is SIGNED: a leading `-` is money out. There is no 收/支 column.
+ *   - `交易名称` carries the kind (`银证转账`, `跨行转账`, `小额普通`, `结息`),
+ *     `附言` the free-text note and `对方账户名` the counterparty. Merchants live
+ *     in 对方账户名 for card payments, so both are mapped.
+ *
+ * Bump the version suffix if Bank of China reshuffles the columns; the pinned id
+ * is what keeps an older file parsing under the older mapping.
+ */
+export const BOC_DEBIT_PDF_TEMPLATE: Template = {
+  id: 'boc-debit-pdf@2026-09',
+  label: '中国银行：借记卡交易流水明细清单（PDF）',
+  note:
+    '已核对：中国银行借记卡 PDF 流水（记账日期/记账时间/金额/余额/交易名称/渠道/附言/对方账户名）。' +
+    '金额带正负号，负数=支出。该表由 PDF 坐标重建而来，导入前请核对预览中的行数与合计。',
+  columns: {
+    date: '记账日期',
+    time: '记账时间',
+    amount: '金额',
+    balance: '余额',
+    txType: '交易名称',
+    method: '渠道',
+    description: '附言',
+    counterparty: '对方账户名',
+  },
+  amountMode: 'signed',
+};
+
+/**
+ * Starter templates. The two `demo-*` entries below are STARTING POINTS, not
+ * verified layouts: no real file was available when they were written. The user
+ * is expected to open the mapping UI, check the column names against their own
+ * export, and save a corrected version — which then outranks them, because the
+ * UI lists saved templates before these.
  */
 export const STARTER_TEMPLATES: readonly Template[] = [
+  BOC_DEBIT_PDF_TEMPLATE,
   {
     id: 'demo-bank@2026-09',
     label: '示例：借记卡（收入/支出分列）',
@@ -107,6 +149,7 @@ export function requiredColumnNames(template: Template): string[] {
   const { columns } = template;
   const names = [
     columns.date,
+    columns.time,
     columns.amount,
     columns.income,
     columns.expense,

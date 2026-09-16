@@ -41,7 +41,14 @@ export interface Inspection {
   header: string[];
   detectedPlatform: DetectedPlatform;
   /** Present only for PDFs. */
-  pdf?: { pageCount: number; pagesRead: number; columnConsistency: number };
+  pdf?: {
+    pageCount: number;
+    pagesRead: number;
+    columnConsistency: number;
+    /** True when columns came from the header row rather than from gap guessing. */
+    headerAnchoredColumns: boolean;
+    columnCount: number;
+  };
 }
 
 export interface InspectRequest {
@@ -244,6 +251,8 @@ export async function inspectFile(request: InspectRequest): Promise<Inspection> 
         pageCount: extracted.pageCount,
         pagesRead: extracted.pagesRead,
         columnConsistency: extracted.columnConsistency,
+        headerAnchoredColumns: extracted.headerAnchoredColumns,
+        columnCount: extracted.columnCount,
       },
     };
   }

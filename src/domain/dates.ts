@@ -105,6 +105,27 @@ export function toUtcIso(
   return new Date(ms).toISOString();
 }
 
+/**
+ * Attach a separate time-of-day column to a date column.
+ *
+ * Bank statements routinely split `记账日期` and `记账时间` into two columns.
+ * Reading only the date would floor every transaction in the file to midnight,
+ * which loses the ordering inside a day and quietly widens both the transfer
+ * pairing window (§6) and the dedupe time bucket (§5) — neither of which is
+ * visible in a total, so neither would be noticed.
+ *
+ * A time already inside the date text wins: some exports give the full timestamp
+ * in the date column and keep a redundant time column beside it.
+ */
+export function combineDateAndTime(dateText: unknown, timeText: unknown): string {
+  const date = String(dateText ?? '').trim();
+  const time = String(timeText ?? '').trim();
+
+  if (time === '') return date;
+  if (/\d{1,2}:\d{2}/.test(date)) return date;
+  return date === '' ? time : `${date} ${time}`;
+}
+
 export function epochSeconds(iso: string): number {
   const t = Date.parse(iso);
   return Number.isNaN(t) ? 0 : Math.floor(t / 1000);

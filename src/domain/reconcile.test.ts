@@ -4,8 +4,10 @@ import { describeChanges, reconcileOverlap } from './reconcile';
 
 function tx(overrides: Partial<Transaction> = {}): Transaction {
   return {
-    id: 'tx_0000000000000001',
-    fingerprint: '0000000000000001',
+    // Not all digits on purpose: the privacy gate rejects any 16-19 digit run as a
+    // possible card number, and it cannot tell a synthetic fingerprint from one.
+    id: 'tx_0123456789abcdef',
+    fingerprint: '0123456789abcdef',
     fingerprintVersion: 2,
     source: 'test',
     accountId: 'acc',
@@ -69,7 +71,7 @@ describe('reconcileOverlap', () => {
     // build may differ, and writing a different id would collide with the unique
     // fingerprint index and abort the whole import.
     const stored = tx({ id: 'tx_legacy_id' });
-    const incoming = tx({ id: 'tx_0000000000000001', amountMinor: 14_500 });
+    const incoming = tx({ id: 'tx_0123456789abcdef', amountMinor: 14_500 });
 
     const result = reconcileOverlap(stored, incoming)!;
 

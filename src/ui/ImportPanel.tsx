@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { PDF_PASSWORD_REQUIRED } from '../importers/errors';
 import { inspectFile, parseInspected, type Inspection } from '../importers/index';
-import { STARTER_TEMPLATES, type Template } from '../importers/template';
+import { requiredColumnNames, STARTER_TEMPLATES, type Template } from '../importers/template';
 import { buildTransactions, type PipelineOutcome } from '../domain/pipeline';
 import { DEFAULT_RULES } from '../domain/categories';
 import { formatMinor } from '../domain/money';
 import { formatShanghai } from '../domain/dates';
 import {
   getExistingRecords,
+  listTemplates,
   putTemplate,
   saveImportBatch,
   type ImportBatch,
@@ -23,6 +24,7 @@ interface Props {
 /** Fields the mapper offers. `date` is the only one with no sensible default. */
 const MAPPABLE_FIELDS: { key: keyof Template['columns']; label: string; hint: string }[] = [
   { key: 'date', label: '交易日期', hint: '必填' },
+  { key: 'time', label: '交易时间', hint: '与日期分列时填' },
   { key: 'amount', label: '金额（单列，带正负号）', hint: '' },
   { key: 'income', label: '收入/贷方（进账列）', hint: '' },
   { key: 'expense', label: '支出/借方（出账列）', hint: '' },
@@ -47,6 +49,7 @@ export default function ImportPanel({ onImported }: Props) {
   const [accountId, setAccountId] = useState('main');
   const [choice, setChoice] = useState<ImporterChoice>('auto');
   const [template, setTemplate] = useState<Template>(() => ({ ...STARTER_TEMPLATES[0]! }));
+  const [savedTemplates, setSavedTemplates] = useState<Template[]>([]);
   const [dragging, setDragging] = useState(false);
   const bytesRef = useRef<Uint8Array | null>(null);
   const fileNameRef = useRef('');
@@ -54,6 +57,49 @@ export default function ImportPanel({ onImported }: Props) {
   const persistTemplate = useCallback(async () => {
     await putTemplate(template);
   }, [template]);
+
+  // Saved templates come first: a mapping the user corrected for their own bank
+  // beats any built-in starting point.
+  useEffect(() => {
+    let cancelled = false;
+    listTemplates()
+      .then((saved) => {
+        if (!cancelled) setSavedTemplates(saved);
+      })
+      .catch(() => {
+        // A storage failure must not block importing; the built-ins still work.
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const templateOptions = useMemo(() => {
+    const byId = new Map<string, Template>();
+    for (const candidate of [...savedTemplates, ...STARTER_TEMPLATES]) byId.set(candidate.id, candidate);
+    return [...byId.values()];
+  }, [savedTemplates]);
+
+  /**
+   * Pre-fill the mapping for a recognised format.
+   *
+   * A template is only applied when EVERY column it names is present in the file,
+   * because mapping an absent column is an error by design (§8) — a partial match
+   * would replace one error message with another. Picked once per file, so the
+   * user's own edits are never overwritten.
+   */
+  const autoPickedRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!inspection || autoPickedRef.current === inspection.fileName) return;
+    autoPickedRef.current = inspection.fileName;
+
+    const present = new Set(inspection.header.map((cell) => cell.trim()).filter((cell) => cell !== ''));
+    const match = templateOptions.find((candidate) => {
+      const names = requiredColumnNames(candidate);
+      return names.length > 0 && names.every((name) => present.has(name));
+    });
+    if (match) setTemplate({ ...match, columns: { ...match.columns } });
+  }, [inspection, templateOptions]);
 
   const runInspection = useCallback(
     async (bytes: Uint8Array, fileName: string, password?: string) => {
@@ -312,9 +358,12 @@ export default function ImportPanel({ onImported }: Props) {
 
             {inspection.pdf && (
               <p className="small muted">
-                PDF 共 {inspection.pdf.pageCount} 页，读取 {inspection.pdf.pagesRead} 页，列一致性{' '}
-                {Math.round(inspection.pdf.columnConsistency * 100)}%。
-                {inspection.pdf.columnConsistency < 0.9 &&
+                PDF 共 {inspection.pdf.pageCount} 页，读取 {inspection.pdf.pagesRead} 页。
+                {inspection.pdf.headerAnchoredColumns
+                  ? `已按表头识别出 ${inspection.pdf.columnCount} 列，数值按横向重叠归位，折行的格子会并入上一行。`
+                  : '未找到表头，只能按空隙猜列，贴在一起的列会被合并。'}
+                {!inspection.pdf.headerAnchoredColumns &&
+                  inspection.pdf.columnConsistency < 0.9 &&
                   ' 列一致性偏低，说明表格重建可能出错，请逐行核对后再导入。'}
               </p>
             )}
@@ -357,6 +406,29 @@ export default function ImportPanel({ onImported }: Props) {
                 <p className="small muted">
                   把文件里的列名指到对应字段上。版本号会随模板一起保存，之后同一家银行的旧文件仍按旧映射解析。
                 </p>
+                <div className="grid" style={{ marginTop: 10 }}>
+                  <div className="field">
+                    <label htmlFor="template-pick">
+                      模板 <span className="muted">· 选中会覆盖下面的列映射</span>
+                    </label>
+                    <select
+                      id="template-pick"
+                      value={templateOptions.some((t) => t.id === template.id) ? template.id : ''}
+                      onChange={(e) => {
+                        const picked = templateOptions.find((t) => t.id === e.target.value);
+                        if (picked) setTemplate({ ...picked, columns: { ...picked.columns } });
+                      }}
+                    >
+                      <option value="">（自定义）</option>
+                      {templateOptions.map((t) => (
+                        <option key={t.id} value={t.id}>
+                          {t.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                </div>
+                {template.note && <p className="small muted">{template.note}</p>}
                 <div className="grid" style={{ marginTop: 10 }}>
                   {MAPPABLE_FIELDS.map(({ key, label, hint }) => (
                     <div className="field" key={key}>

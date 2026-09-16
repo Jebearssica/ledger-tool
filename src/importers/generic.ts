@@ -7,7 +7,7 @@
  * bank is a data change, not a code change.
  */
 import { parseAmountToMinor } from '../domain/money';
-import { toUtcIso } from '../domain/dates';
+import { combineDateAndTime, toUtcIso } from '../domain/dates';
 import type { Direction, DraftTransaction, ParseResult, ParseWarning } from '../domain/types';
 import { buildColumnIndex, cellAt, detectHeaderRowIndex, type Table } from './text';
 import { headerMismatchError, inferDirectionFromText } from './shared';
@@ -74,12 +74,16 @@ export function parseGeneric(table: Table, template: Template, options: GenericO
       if (name !== '') rawMap.set(name, row[idx] ?? '');
     });
 
-    const occurredAt = toUtcIso(record(template.columns.date));
+    // A statement that splits date and time into two columns needs them put back
+    // together, or every row in the file collapses onto midnight.
+    const dateText = record(template.columns.date);
+    const timeText = template.columns.time ? record(template.columns.time) : '';
+    const occurredAt = toUtcIso(combineDateAndTime(dateText, timeText));
     if (!occurredAt) {
       warnings.push({
         code: 'unparsable-date',
         row: i + 1,
-        message: `Could not read a date from "${record(template.columns.date)}"; row skipped.`,
+        message: `Could not read a date from "${dateText}"; row skipped.`,
       });
       continue;
     }
